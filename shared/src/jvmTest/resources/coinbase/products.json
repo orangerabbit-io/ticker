@@ -1,0 +1,46 @@
+{
+  "products": [
+    {
+      "product_id": "BTC-USD",
+      "product_type": "SPOT",
+      "base_display_symbol": "BTC",
+      "base_name": "Bitcoin",
+      "quote_currency_id": "USD",
+      "price": "107500.12",
+      "price_percentage_change_24h": "-1.2345",
+      "volume_24h": "8123.45",
+      "status": "online"
+    },
+    {
+      "product_id": "SOL-USD",
+      "product_type": "SPOT",
+      "base_display_symbol": "SOL",
+      "base_name": "Solana",
+      "quote_currency_id": "USD",
+      "price": "205.50",
+      "price_percentage_change_24h": "3.25",
+      "volume_24h": "123456.78",
+      "status": "online"
+    },
+    {
+      "product_id": "FTM-PERP-INTX",
+      "product_type": "FUTURE",
+      "base_display_symbol": "FTM",
+      "base_name": "Fantom Perpetual Future",
+      "quote_currency_id": "USD",
+      "price": "1.23",
+      "price_percentage_change_24h": "1.0",
+      "volume_24h": "100.0",
+      "status": "online"
+    },
+    {
+      "product_id": "ETH-USD",
+      "product_type": "SPOT",
+      "base_display_symbol": "ETH",
+      "base_name": "Ethereum",
+      "quote_currency_id": "USD",
+      "price": "",
+      "status": "offline"
+    }
+  ]
+}
