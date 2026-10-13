@@ -1,0 +1,29 @@
+[versions]
+kotlin = "2.3.21"
+composeMultiplatform = "1.9.0"
+ktor = "3.5.0"
+koin = "4.1.0"
+kotlinxSerialization = "1.9.0"
+coroutines = "1.10.2"
+agp = "9.1.1"
+activityCompose = "1.12.0"
+kaml = "0.72.0"
+# AGP 9.x pairs with the Gradle 9.3.1 wrapper (see gradle/wrapper/gradle-wrapper.properties).
+
+[libraries]
+kaml = { module = "com.charleskorn.kaml:kaml", version.ref = "kaml" }
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+
+[plugins]
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
+composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+androidApplication = { id = "com.android.application", version.ref = "agp" }
+androidLibrary = { id = "com.android.library", version.ref = "agp" }

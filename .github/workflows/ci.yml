@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      - name: Run JVM tests
+        run: ./gradlew :shared:jvmTest
+
+      - name: Assemble debug APK
+        run: ./gradlew :composeApp:assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ticker-debug-apk
+          # AGP 9.1.1: assembleDebug writes the APK to outputs/apk/debug/<module>-debug.apk
+          # (module-scoped name). The intermediates redirect.txt is only the IDE pointer.
+          path: composeApp/build/outputs/apk/debug/composeApp-debug.apk
