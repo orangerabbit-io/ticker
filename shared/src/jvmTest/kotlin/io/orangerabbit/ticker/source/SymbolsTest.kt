@@ -110,7 +110,7 @@ class SymbolsTest {
     }
 
     @Test
-    fun `implicit lot symbols keep lot order before watchlist and buckets keep watchlist order`() {
+    fun `implicit lot symbols append after watchlist in lot order and buckets keep watchlist order`() {
         val resolved = resolveGroup(
             ConfigGroup(
                 name = "g",
@@ -120,8 +120,8 @@ class SymbolsTest {
             symbolMap(),
         )
 
-        assertEquals(listOf("MSFT", "GOOG", "AAPL", "ACH.X", "10SET.X"), resolved.group.watchlist)
-        assertEquals(listOf("MSFT", "GOOG", "AAPL"), resolved.yahooSymbols)
+        assertEquals(listOf("AAPL", "ACH.X", "10SET.X", "MSFT", "GOOG"), resolved.group.watchlist)
+        assertEquals(listOf("AAPL", "MSFT", "GOOG"), resolved.yahooSymbols)
         assertEquals(listOf("ACH-USD"), resolved.coinbaseProducts)
         assertEquals(listOf("10SET.X"), resolved.unresolved)
     }
@@ -137,8 +137,8 @@ class SymbolsTest {
             symbolMap(),
         )
 
-        assertEquals(listOf("Xyz", "ABC", "DEF"), resolved.group.watchlist)
-        assertEquals(listOf("Xyz", "ABC", "DEF"), resolved.yahooSymbols)
+        assertEquals(listOf("ABC", "DEF", "Xyz"), resolved.group.watchlist)
+        assertEquals(listOf("ABC", "DEF", "Xyz"), resolved.yahooSymbols)
     }
 
     @Test

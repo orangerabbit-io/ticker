@@ -44,7 +44,8 @@ fun parseSymbolsCsv(body: String): TickerSymbolMap {
 // suffix is stripped to a Coinbase product id; a ".X" suffix is resolved through the
 // ticker-static map (exact key, the map key keeps the ".X" suffix) to its source-native
 // symbol. Symbols in lots that are not on the watchlist (case-insensitive) are implicitly
-// added to the watchlist first, in lot order, keeping the first lot form for duplicates.
+// appended after the watchlist entries, in lot order, keeping the first lot form for
+// duplicates (CLI getAssetGroups: watchlist loop first, then the lots loop appends).
 fun resolveGroup(group: ConfigGroup, symbolMap: TickerSymbolMap): ResolvedGroup {
     val watchlist = implicitWatchlist(group)
     val yahooSymbols = mutableListOf<String>()
@@ -82,7 +83,7 @@ private fun implicitWatchlist(group: ConfigGroup): List<String> {
             additions.add(lot.symbol)
         }
     }
-    return additions + group.watchlist
+    return group.watchlist + additions
 }
 
 // Splits CSV records the way encoding/csv does with LazyQuotes: blank lines are skipped,
