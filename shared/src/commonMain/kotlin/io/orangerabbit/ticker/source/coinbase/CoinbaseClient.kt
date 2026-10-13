@@ -46,8 +46,16 @@ class CoinbaseClient(private val http: HttpClient) {
             throw IllegalStateException("unexpected response: ${response.status.value}")
         }
 
+        val body = try {
+            response.bodyAsText()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw transportFailure("failed to read response", e)
+        }
+
         return try {
-            parseProductsResponse(response.bodyAsText()).products
+            parseProductsResponse(body).products
         } catch (e: Exception) {
             throw IllegalStateException("failed to decode response: ${e.message}", e)
         }
