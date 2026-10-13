@@ -65,21 +65,27 @@ class QuotePoller(
     private var yahooQuotes: List<AssetQuote> = emptyList()
     private var coinbaseQuotes: List<AssetQuote> = emptyList()
 
-    // start cancels any prior loop, resolves the group against the ticker-static symbol
-    // map, refreshes immediately, then refreshes on the interval floor of 30 seconds. The
-    // loop runs on the caller's dispatcher but is owned by the poller: only stop or a new
-    // start cancels it.
+    // start cancels any prior loop and any prior startup, resolves the group against the
+    // ticker-static symbol map, refreshes immediately, then refreshes on the interval floor
+    // of 30 seconds. Lifecycle ownership is registered before the first suspension: stop()
+    // or a later start() cancels the registered job — including in-flight startup work —
+    // and a superseded startup cannot install a loop because its scope is already cancelled.
     suspend fun start(config: TickerConfig, groupIndex: Int = 0) {
         stop()
         val cfg = config.withDefaultGroup()
         this.config = cfg
-        symbolMap = symbols.fetchSymbolMap()
-        refreshMutex.withLock { switchGroup(cfg, groupIndex) }
-        refresh()
 
         val job = SupervisorJob()
         loopJob = job
-        CoroutineScope(currentCoroutineContext() + job).launch {
+        val scope = CoroutineScope(currentCoroutineContext() + job)
+
+        scope.launch {
+            symbolMap = symbols.fetchSymbolMap()
+            refreshMutex.withLock { switchGroup(cfg, groupIndex) }
+            refresh()
+        }.join()
+
+        scope.launch {
             while (true) {
                 delay(max(cfg.interval, 30) * 1000L)
                 refresh()
@@ -130,41 +136,58 @@ class QuotePoller(
             val cfg = config ?: return
             val resolved = resolved ?: return
             _state.update { it.copy(isLoading = true) }
+            try {
+                val errors = mutableListOf<String>()
 
-            val errors = mutableListOf<String>()
+                if (resolved.yahooSymbols.isNotEmpty()) {
+                    yahoo.getQuotes(resolved.yahooSymbols).fold(
+                        onSuccess = { yahooQuotes = it.withTickerIdentities(resolved) { quote -> quote.symbol } },
+                        onFailure = { errors.add(yahooError) },
+                    )
+                }
+                if (resolved.coinbaseProducts.isNotEmpty()) {
+                    coinbase.getQuotes(resolved.coinbaseProducts).fold(
+                        onSuccess = {
+                            coinbaseQuotes = it.withTickerIdentities(resolved) { quote -> quote.meta.symbolInSourceApi }
+                        },
+                        onFailure = { errors.add(coinbaseError) },
+                    )
+                }
 
-            if (resolved.yahooSymbols.isNotEmpty()) {
-                yahoo.getQuotes(resolved.yahooSymbols).fold(
-                    onSuccess = { yahooQuotes = it },
-                    onFailure = { errors.add(yahooError) },
-                )
-            }
-            if (resolved.coinbaseProducts.isNotEmpty()) {
-                coinbase.getQuotes(resolved.coinbaseProducts).fold(
-                    onSuccess = { coinbaseQuotes = it },
-                    onFailure = { errors.add(coinbaseError) },
-                )
-            }
+                val quotes = yahooQuotes + coinbaseQuotes
+                val rates = fetchRates(cfg, quotes)
 
-            val quotes = yahooQuotes + coinbaseQuotes
-            val rates = fetchRates(cfg, quotes)
+                val portfolio = getAssets(cfg, resolved.group, quotes, rates)
+                val assets = newSorter(cfg.sort)(portfolio.assets)
+                val unavailable = missingSymbols(resolved)
 
-            val portfolio = getAssets(cfg, resolved.group, quotes, rates)
-            val assets = newSorter(cfg.sort)(portfolio.assets)
-            val unavailable = missingSymbols(resolved)
-
-            _state.update {
-                it.copy(
-                    group = resolved.group,
-                    assets = assets,
-                    summary = portfolio.summary.takeIf { resolved.group.lots.isNotEmpty() },
-                    unavailable = unavailable,
-                    error = errors.joinToString("; ").ifEmpty { null },
-                    isLoading = false,
-                    lastRefreshAt = clock(),
-                )
+                _state.update {
+                    it.copy(
+                        group = resolved.group,
+                        assets = assets,
+                        summary = portfolio.summary.takeIf { resolved.group.lots.isNotEmpty() },
+                        unavailable = unavailable,
+                        error = errors.joinToString("; ").ifEmpty { null },
+                        lastRefreshAt = clock(),
+                    )
+                }
+            } finally {
+                // resets loading even when the refresh is cancelled mid-request, keeping
+                // the previous assets and propagating the cancellation to the caller
+                _state.update { it.copy(isLoading = false) }
             }
         }
+    }
+
+    // withTickerIdentities restores the configured ticker symbol on each returned quote so
+    // aggregation lookups (lots, order index) match the user's config, keeping
+    // meta.symbolInSourceApi as the source API identity (e.g. the Coinbase product id).
+    private fun List<AssetQuote>.withTickerIdentities(
+        resolved: ResolvedGroup,
+        sourceKey: (AssetQuote) -> String,
+    ): List<AssetQuote> = map { quote ->
+        val ticker = resolved.tickerBySourceSymbol[sourceKey(quote)] ?: quote.symbol
+        if (ticker == quote.symbol) quote else quote.copy(symbol = ticker)
     }
 
     private suspend fun fetchRates(cfg: TickerConfig, quotes: List<AssetQuote>): CurrencyRates {

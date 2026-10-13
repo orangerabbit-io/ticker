@@ -20,12 +20,15 @@ import io.orangerabbit.ticker.config.TickerConfig
 import io.orangerabbit.ticker.source.SymbolsClient
 import io.orangerabbit.ticker.source.coinbase.CoinbaseQuoteSource
 import io.orangerabbit.ticker.source.yahoo.YahooQuoteSource
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -61,24 +64,26 @@ private class FakeCoinbase(
     }
 }
 
-private fun fakeSymbols(): SymbolsClient =
-    SymbolsClient(HttpClient(MockEngine { respond("", HttpStatusCode.OK) }))
+private fun fakeSymbols(csv: String = ""): SymbolsClient =
+    SymbolsClient(HttpClient(MockEngine { respond(csv, HttpStatusCode.OK) }))
 
 private fun quote(
     symbol: String,
     price: Double = 100.0,
     from: String = "USD",
     symbolInSourceApi: String = "",
+    source: QuoteSource = QuoteSource.YAHOO,
+    assetClass: AssetClass = AssetClass.STOCK,
 ): AssetQuote = AssetQuote(
     name = symbol,
     symbol = symbol,
-    assetClass = AssetClass.STOCK,
+    assetClass = assetClass,
     currency = Currency(from = from, to = ""),
     quotePrice = QuotePrice(price = price),
     quoteExtended = QuoteExtended(),
-    quoteSource = QuoteSource.YAHOO,
+    quoteSource = source,
     exchange = ExchangeInfo(),
-    meta = Meta(symbolInSourceApi = symbolInSourceApi),
+    meta = Meta(isVariablePrecision = source == QuoteSource.COINBASE, symbolInSourceApi = symbolInSourceApi),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -257,6 +262,144 @@ class QuotePollerTest {
         advanceTimeBy(30_000)
         runCurrent()
         assertEquals(3, yahoo.quoteCalls.size)
+
+        poller.stop()
+    }
+
+    @Test
+    fun `stop during suspended startup prevents the poll loop from installing`() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val yahoo = FakeYahoo(quotes = { symbols ->
+            started.complete(Unit)
+            gate.await()
+            Result.success(symbols.map { quote(it) })
+        })
+        val poller = QuotePoller(yahoo, FakeCoinbase(), fakeSymbols(), clock = { testScheduler.currentTime })
+
+        val starter = launch {
+            poller.start(TickerConfig(interval = 30, groups = listOf(ConfigGroup(name = "g", watchlist = listOf("AAPL")))))
+        }
+        started.await()
+        assertEquals(listOf(listOf("AAPL")), yahoo.quoteCalls)
+        assertTrue(poller.state.value.isLoading)
+
+        poller.stop()
+        runCurrent()
+        gate.complete(Unit)
+        starter.join()
+
+        assertFalse(poller.state.value.isLoading)
+        assertTrue(poller.state.value.assets.isEmpty())
+
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(1, yahoo.quoteCalls.size)
+    }
+
+    @Test
+    fun `a superseded start cannot install a second poll loop`() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        var call = 0
+        val yahoo = FakeYahoo(quotes = { symbols ->
+            call++
+            if (call == 1) {
+                started.complete(Unit)
+                gate.await()
+            }
+            Result.success(symbols.map { quote(it) })
+        })
+        val poller = QuotePoller(yahoo, FakeCoinbase(), fakeSymbols(), clock = { testScheduler.currentTime })
+        val groupsA = listOf(ConfigGroup(name = "a", watchlist = listOf("AAPL")))
+        val groupsB = listOf(ConfigGroup(name = "b", watchlist = listOf("MSFT")))
+
+        val starter1 = launch { poller.start(TickerConfig(interval = 30, groups = groupsA)) }
+        started.await()
+        val starter2 = launch { poller.start(TickerConfig(interval = 30, groups = groupsB)) }
+        runCurrent()
+        gate.complete(Unit)
+        starter1.join()
+        starter2.join()
+
+        assertEquals(listOf(listOf("AAPL"), listOf("MSFT")), yahoo.quoteCalls)
+
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(3, yahoo.quoteCalls.size)
+        assertEquals(listOf("MSFT"), poller.state.value.assets.map { it.symbol })
+
+        poller.stop()
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(3, yahoo.quoteCalls.size)
+    }
+
+    @Test
+    fun `stop during a suspended request resets loading and retains state`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        var call = 0
+        val yahoo = FakeYahoo(quotes = { symbols ->
+            call++
+            if (call == 2) {
+                gate.await()
+            }
+            Result.success(symbols.map { quote(it) })
+        })
+        val poller = QuotePoller(yahoo, FakeCoinbase(), fakeSymbols(), clock = { testScheduler.currentTime })
+
+        poller.start(TickerConfig(interval = 30, groups = listOf(ConfigGroup(name = "g", watchlist = listOf("AAPL")))))
+        assertEquals(listOf("AAPL"), poller.state.value.assets.map { it.symbol })
+
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertTrue(poller.state.value.isLoading)
+
+        poller.stop()
+        runCurrent()
+
+        assertFalse(poller.state.value.isLoading)
+        assertEquals(listOf("AAPL"), poller.state.value.assets.map { it.symbol })
+
+        gate.complete(Unit)
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(2, yahoo.quoteCalls.size)
+    }
+
+    @Test
+    fun `X shorthand lot is matched to its coinbase quote before aggregation`() = runTest {
+        val coinbase = FakeCoinbase(quotes = {
+            Result.success(
+                listOf(
+                    quote(
+                        symbol = "SOL.CB",
+                        price = 100.0,
+                        from = "USD",
+                        symbolInSourceApi = "SOL-USD",
+                        source = QuoteSource.COINBASE,
+                        assetClass = AssetClass.CRYPTOCURRENCY,
+                    ),
+                ),
+            )
+        })
+        val poller = QuotePoller(FakeYahoo(), coinbase, fakeSymbols("SOL.X,SOL-USD,cb\n"), clock = { testScheduler.currentTime })
+
+        poller.start(
+            TickerConfig(
+                interval = 30,
+                groups = listOf(ConfigGroup(name = "g", lots = listOf(Lot(symbol = "SOL.X", quantity = 2.0, unitCost = 50.0)))),
+            ),
+        )
+
+        assertEquals(listOf(listOf("SOL-USD")), coinbase.quoteCalls)
+        val asset = poller.state.value.assets.single()
+        assertEquals("SOL.X", asset.symbol)
+        assertEquals(2.0, asset.position.quantity)
+        assertEquals(100.0, asset.position.cost)
+        assertEquals(200.0, asset.position.value)
+        assertEquals(200.0, poller.state.value.summary!!.value)
+        assertTrue(poller.state.value.unavailable.isEmpty())
 
         poller.stop()
     }
