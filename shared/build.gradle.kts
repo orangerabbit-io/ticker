@@ -28,6 +28,8 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
         }
         jvmTest.dependencies {
+            implementation(libs.ktor.client.mock)
+            implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlin.test)
         }
     }

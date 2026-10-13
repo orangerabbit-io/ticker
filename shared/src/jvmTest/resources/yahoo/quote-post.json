@@ -1,0 +1,42 @@
+{
+  "quoteResponse": {
+    "result": [
+      {
+        "language": "en-US",
+        "region": "US",
+        "quoteType": "EQUITY",
+        "typeDisp": "Equity",
+        "quoteSourceName": "Nasdaq Real Time Price",
+        "currency": "USD",
+        "marketState": "POST",
+        "exchange": "NMS",
+        "fullExchangeName": "NasdaqGS",
+        "exchangeDataDelayedBy": 0,
+        "symbol": "NVDA",
+        "shortName": "NVIDIA Corporation",
+        "longName": "NVIDIA Corporation",
+        "firstTradeDateEpochUtc": 788640600,
+        "regularMarketChange": { "raw": 1.34, "fmt": "1.34" },
+        "regularMarketChangePercent": { "raw": 0.7368, "fmt": "0.74%" },
+        "regularMarketPrice": { "raw": 183.22, "fmt": "183.22" },
+        "regularMarketPreviousClose": { "raw": 181.88, "fmt": "181.88" },
+        "regularMarketOpen": { "raw": 182.10, "fmt": "182.10" },
+        "regularMarketDayRange": { "raw": "181.42 - 184.05", "fmt": "181.42 - 184.05" },
+        "regularMarketDayHigh": { "raw": 184.05, "fmt": "184.05" },
+        "regularMarketDayLow": { "raw": 181.42, "fmt": "181.42" },
+        "regularMarketVolume": { "raw": 122334455, "fmt": "122.33M" },
+        "postMarketChange": { "raw": 0.83, "fmt": "0.83" },
+        "postMarketChangePercent": { "raw": 0.453, "fmt": "0.45%" },
+        "postMarketPrice": { "raw": 184.05, "fmt": "184.05" },
+        "preMarketChange": { "raw": 0.0, "fmt": "0.00" },
+        "preMarketChangePercent": { "raw": 0.0, "fmt": "0.00%" },
+        "preMarketPrice": { "raw": 0.0, "fmt": "0.00" },
+        "fiftyTwoWeekHigh": { "raw": 212.19, "fmt": "212.19" },
+        "fiftyTwoWeekLow": { "raw": 86.62, "fmt": "86.62" },
+        "marketCap": { "raw": 4465000000000, "fmt": "4.47T" },
+        "esgPopulated": false
+      }
+    ],
+    "error": null
+  }
+}
