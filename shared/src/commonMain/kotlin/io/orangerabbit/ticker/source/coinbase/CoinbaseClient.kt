@@ -9,12 +9,18 @@ import io.ktor.http.HttpStatusCode
 import io.orangerabbit.ticker.asset.AssetQuote
 import kotlinx.coroutines.CancellationException
 
+// CoinbaseQuoteSource is the quote port consumed by the poller: asset quotes keyed by
+// Coinbase product id.
+interface CoinbaseQuoteSource {
+    suspend fun getQuotes(productIds: List<String>): Result<List<AssetQuote>>
+}
+
 // CoinbaseClient is a client for the Coinbase market products API ported from the CLI's
 // monitor/coinbase/unary package. The endpoint is unauthenticated, so no session or
 // credentials are established here.
-class CoinbaseClient(private val http: HttpClient) {
+class CoinbaseClient(private val http: HttpClient) : CoinbaseQuoteSource {
 
-    suspend fun getQuotes(productIds: List<String>): Result<List<AssetQuote>> {
+    override suspend fun getQuotes(productIds: List<String>): Result<List<AssetQuote>> {
         if (productIds.isEmpty()) {
             return Result.success(emptyList())
         }

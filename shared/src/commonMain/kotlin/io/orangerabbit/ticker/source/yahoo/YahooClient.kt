@@ -22,6 +22,14 @@ import io.orangerabbit.ticker.asset.AssetQuote
 import io.orangerabbit.ticker.asset.CurrencyRates
 import kotlinx.coroutines.CancellationException
 
+// YahooQuoteSource is the quote port consumed by the poller: asset quotes and currency
+// conversion rates.
+interface YahooQuoteSource {
+    suspend fun getQuotes(symbols: List<String>): Result<List<AssetQuote>>
+
+    suspend fun getCurrencyRates(fromCurrencies: List<String>, toCurrency: String): Result<CurrencyRates>
+}
+
 // YahooClient is a client for the Yahoo Finance quote API ported from the CLI's
 // monitor/yahoo/unary package: a quote request authenticated with a session
 // (cookies + crumb) established by a handshake and refreshed exactly once when
@@ -32,11 +40,11 @@ import kotlinx.coroutines.CancellationException
 class YahooClient(
     http: HttpClient,
     private val sessionStore: YahooSessionStore,
-) {
+) : YahooQuoteSource {
 
     private val http: HttpClient = http.config { followRedirects = false }
 
-    suspend fun getQuotes(symbols: List<String>): Result<List<AssetQuote>> {
+    override suspend fun getQuotes(symbols: List<String>): Result<List<AssetQuote>> {
         if (symbols.isEmpty()) {
             return Result.success(emptyList())
         }
@@ -53,7 +61,7 @@ class YahooClient(
     // getCurrencyRates accepts ISO 4217 currency codes and a target ISO 4217 currency code
     // and returns a conversion rate for each of the input currencies to the target currency.
     // Ported from the CLI's GetCurrencyRates.
-    suspend fun getCurrencyRates(fromCurrencies: List<String>, toCurrency: String): Result<CurrencyRates> {
+    override suspend fun getCurrencyRates(fromCurrencies: List<String>, toCurrency: String): Result<CurrencyRates> {
         val to = if (toCurrency.isEmpty()) "USD" else toCurrency
 
         // Create currency pair symbols in format "FROMTO=X" (e.g., "EURUSD=X")
