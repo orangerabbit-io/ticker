@@ -13,6 +13,7 @@ import io.ktor.http.decodeURLQueryComponent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -28,14 +29,20 @@ class YahooClientTest {
         cookies.forEach { append(HttpHeaders.SetCookie, it) }
     }
 
-    private fun mockClient(replies: List<MockReply>, recorded: MutableList<HttpRequestData>): HttpClient {
+    private fun mockClient(
+        replies: List<MockReply>,
+        recorded: MutableList<HttpRequestData>,
+        followRedirects: Boolean = false,
+        expectSuccess: Boolean = false,
+    ): HttpClient {
         val queue = ArrayDeque(replies)
         return HttpClient(MockEngine { request ->
             recorded += request
             val reply = queue.removeFirst()
             respond(reply.body, reply.status, reply.headers)
         }) {
-            followRedirects = false
+            this.followRedirects = followRedirects
+            this.expectSuccess = expectSuccess
         }
     }
 
@@ -134,7 +141,9 @@ class YahooClientTest {
 
         val result = client.getQuotes(listOf("AAPL", "BTC-USD"))
 
-        assertTrue(result.isFailure)
+        val message = assertNotNull(result.exceptionOrNull()).message.orEmpty()
+        assertTrue(message.contains("401"), "expected status code in message but was <$message>")
+        assertFalse(message.contains("crumb"), "token-bearing url leaked in <$message>")
         val quoteRequests = recorded.filter { it.url.encodedPath == "/v7/finance/quote" }
         assertEquals(2, quoteRequests.size)
     }
@@ -176,7 +185,8 @@ class YahooClientTest {
             MockReply(HttpStatusCode.OK, body = "foo.bar"),
             MockReply(HttpStatusCode.OK, body = fixture("quote-regular.json")),
         )
-        val client = YahooClient(mockClient(replies, recorded), store)
+        // expectSuccess = true must not turn the consent 303 into a response exception
+        val client = YahooClient(mockClient(replies, recorded, expectSuccess = true), store)
 
         val result = client.getQuotes(listOf("AAPL", "BTC-USD"))
 
@@ -204,5 +214,75 @@ class YahooClientTest {
         assertTrue(quoteRequest.url.toString().contains("crumb=foo.bar"))
         assertTrue(cookieHeader(quoteRequest).contains("A3=eu-a3"))
         assertEquals("foo.bar", store.get()?.crumb)
+    }
+
+    @Test
+    fun `consent redirect to foreign host fails without requesting it`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val store = InMemorySessionStore()
+        val replies = listOf(
+            MockReply(
+                status = HttpStatusCode.SeeOther,
+                headers = Headers.build {
+                    append(HttpHeaders.Location, "https://example.com/consent?sessionId=S&csrfToken=CSRF1")
+                },
+            ),
+        )
+        // even with an injected client that follows redirects, the redirect target
+        // must be validated before it is requested
+        val client = YahooClient(mockClient(replies, recorded, followRedirects = true), store)
+
+        val result = client.getQuotes(listOf("AAPL"))
+
+        val message = assertNotNull(result.exceptionOrNull()).message.orEmpty()
+        assertTrue(message.contains("session refresh"), "expected session error but was <$message>")
+        assertTrue(message.contains("consent redirect"), "expected consent location error but was <$message>")
+        assertFalse(message.contains("example.com"), "redirect location leaked in <$message>")
+        assertEquals(1, recorded.size)
+        assertEquals("finance.yahoo.com", recorded[0].url.host)
+    }
+
+    @Test
+    fun `unauthorized refreshes and retries once with expectSuccess client`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val store = InMemorySessionStore()
+        store.put(YahooSession(cookies = listOf("A3" to "stale-a3"), crumb = "stale.crumb"))
+        val replies = listOf(
+            MockReply(HttpStatusCode.Unauthorized),
+            MockReply(HttpStatusCode.OK, headers = setCookieHeaders("A3=fresh-a3; Path=/")),
+            MockReply(HttpStatusCode.OK, body = "fresh.crumb"),
+            MockReply(HttpStatusCode.OK, body = fixture("quote-regular.json")),
+        )
+        val client = YahooClient(mockClient(replies, recorded, expectSuccess = true), store)
+
+        val result = client.getQuotes(listOf("AAPL", "BTC-USD"))
+
+        assertEquals(2, result.getOrThrow().size)
+        val quoteRequests = recorded.filter { it.url.encodedPath == "/v7/finance/quote" }
+        assertEquals(2, quoteRequests.size)
+        assertTrue(quoteRequests[1].url.toString().contains("crumb=fresh.crumb"))
+    }
+
+    @Test
+    fun `transport failure messages do not leak request tokens`() = runTest {
+        val store = InMemorySessionStore()
+        store.put(YahooSession(cookies = listOf("A3" to "seed-a3"), crumb = "secret.crumb"))
+        val http = HttpClient(MockEngine {
+            throw IllegalStateException(
+                "Client request(GET https://query1.finance.yahoo.com/v7/finance/quote?crumb=secret.crumb) failed",
+            )
+        })
+
+        val result = YahooClient(http, store).getQuotes(listOf("AAPL"))
+
+        val error = assertNotNull(result.exceptionOrNull())
+        var current: Throwable? = error
+        while (current != null) {
+            val message = current.message.orEmpty()
+            assertFalse(message.contains("secret"), "token leaked in <$message>")
+            assertFalse(message.contains("crumb"), "token-bearing url leaked in <$message>")
+            current = current.cause
+        }
+        assertTrue(error.message.orEmpty().contains("failed to make request"), "was <${error.message}>")
     }
 }

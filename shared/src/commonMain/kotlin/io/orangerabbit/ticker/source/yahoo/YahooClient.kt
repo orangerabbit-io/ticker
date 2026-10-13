@@ -1,6 +1,8 @@
 package io.orangerabbit.ticker.source.yahoo
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.ResponseException
+import io.ktor.client.plugins.expectSuccess
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -12,6 +14,8 @@ import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.URLProtocol
+import io.ktor.http.Url
 import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
 import io.orangerabbit.ticker.asset.AssetQuote
@@ -20,12 +24,16 @@ import kotlinx.coroutines.CancellationException
 // YahooClient is a client for the Yahoo Finance quote API ported from the CLI's
 // monitor/yahoo/unary package: a quote request authenticated with a session
 // (cookies + crumb) established by a handshake and refreshed exactly once when
-// rejected. Redirects are handled explicitly here, so callers must configure the
-// HttpClient with followRedirects = false and without automatic cookie storage.
+// rejected. The session handshake follows redirects explicitly and validates
+// every redirect target against the destination allowlist before requesting it,
+// so automatic redirect following is disabled here regardless of caller config;
+// callers must also configure the HttpClient without automatic cookie storage.
 class YahooClient(
-    private val http: HttpClient,
+    http: HttpClient,
     private val sessionStore: YahooSessionStore,
 ) {
+
+    private val http: HttpClient = http.config { followRedirects = false }
 
     suspend fun getQuotes(symbols: List<String>): Result<List<AssetQuote>> {
         if (symbols.isEmpty()) {
@@ -102,11 +110,12 @@ class YahooClient(
                 header(HttpHeaders.Origin, baseURL)
                 header(HttpHeaders.UserAgent, defaultUserAgent)
                 cookieHeader(session.cookies)
+                expectSuccess = false
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            throw IllegalStateException("failed to make request: ${e.message}", e)
+            throw transportFailure("failed to make request", e)
         }
 
     private suspend fun getCookie(): List<Pair<String, String>> {
@@ -116,11 +125,12 @@ class YahooClient(
                 header(HttpHeaders.Accept, defaultAcceptValue)
                 header(HttpHeaders.AcceptLanguage, defaultAcceptLanguage)
                 header(HttpHeaders.UserAgent, defaultUserAgent)
+                expectSuccess = false
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            throw IllegalStateException("error requesting a cookie: ${e.message}", e)
+            throw transportFailure("error requesting a cookie", e)
         }
 
         val location = response.headers[HttpHeaders.Location]
@@ -142,6 +152,8 @@ class YahooClient(
     // to the consent form with the GUCS cookies collected along the redirect, and
     // take the A3 cookies set by the consent endpoint. Ported from the CLI's getCookieEU.
     private suspend fun getCookieEU(redirectLocation: String): List<Pair<String, String>> {
+        validateConsentLocation(redirectLocation)
+
         val observedURLs = mutableListOf(redirectLocation)
 
         val consentRedirectResponse = try {
@@ -150,11 +162,12 @@ class YahooClient(
                 header(HttpHeaders.Accept, defaultAcceptValue)
                 header(HttpHeaders.AcceptLanguage, defaultAcceptLanguage)
                 header(HttpHeaders.UserAgent, defaultUserAgent)
+                expectSuccess = false
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            throw IllegalStateException("error refreshing EU session: ${e.message}", e)
+            throw transportFailure("error refreshing EU session", e)
         }
 
         consentRedirectResponse.bodyAsText()
@@ -198,11 +211,12 @@ class YahooClient(
                 cookieHeader(gucsCookies)
                 contentType(ContentType.Application.FormUrlEncoded)
                 setBody(formBody)
+                expectSuccess = false
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            throw IllegalStateException("HTTP protocol error attempting to agree to EU consent request: ${e.message}", e)
+            throw transportFailure("HTTP protocol error attempting to agree to EU consent request", e)
         }
 
         consentResponse.bodyAsText()
@@ -227,11 +241,12 @@ class YahooClient(
                 header(HttpHeaders.Origin, sessionRootURL)
                 header(HttpHeaders.UserAgent, defaultUserAgent)
                 cookieHeader(cookies)
+                expectSuccess = false
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            throw IllegalStateException("error requesting a crumb: ${e.message}", e)
+            throw transportFailure("error requesting a crumb", e)
         }
 
         if (response.status.value !in 200..299) {
@@ -257,6 +272,7 @@ class YahooClient(
         private const val sessionCrumbPath = "/v1/test/getcrumb"
         private const val sessionConsentURL = "https://consent.yahoo.com"
         private const val sessionConsentPath = "/v2/collectConsent"
+        private const val consentLocationError = "session refresh error: unexpected consent redirect location"
 
         private const val defaultUserAgent =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
@@ -289,6 +305,32 @@ class YahooClient(
 
         private val sessionIdRegex = Regex("sessionId=(?:([A-Za-z0-9_-]*))")
         private val csrfTokenRegex = Regex("(?:gcrumb|csrfToken|csrf)=(?:([A-Za-z0-9_-]*))")
+
+        // Maps transport failures to a fixed message plus status code only: HTTP-layer
+        // exception messages can embed the request URL, which carries the crumb, so the
+        // original message and cause are deliberately dropped.
+        private fun transportFailure(message: String, cause: Exception): Exception {
+            val status = (cause as? ResponseException)?.response?.status?.value
+            return IllegalStateException(if (status != null) "$message: $status" else message)
+        }
+
+        // validateConsentLocation rejects redirect targets outside the destination
+        // allowlist before any request is issued for them.
+        private fun validateConsentLocation(location: String) {
+            val url = try {
+                Url(location)
+            } catch (e: Exception) {
+                throw IllegalStateException(consentLocationError)
+            }
+
+            val isAllowed = url.protocol == URLProtocol.HTTPS &&
+                url.host.equals("consent.yahoo.com", ignoreCase = true) &&
+                url.port == URLProtocol.HTTPS.defaultPort
+
+            if (!isAllowed) {
+                throw IllegalStateException(consentLocationError)
+            }
+        }
 
         private fun isEUConsentRedirect(status: HttpStatusCode, location: String): Boolean =
             "/consent" in location && status.value in 300..399
