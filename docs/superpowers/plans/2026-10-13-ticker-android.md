@@ -267,7 +267,7 @@ Expected: BUILD SUCCESSFUL.
 - [ ] **Step 2: Run** `--tests "*ConfigJsonTest*"` — Expected: FAIL.
 - [ ] **Step 3: Implement** JSON DTOs + mapping in `:shared`. Run — PASS.
 - [ ] **Step 4: Commit** `feat: config json serialization for datastore`
-- [ ] **Step 5: Implement Android shell** — DataStore repository (SAF via `androidx.documentfile`? No: `contentResolver.openInputStream/openOutputStream` with persisted URI permissions), import → parse → save (failure → user-visible message via returned `Result`), export → `toYaml()`; `GroupTabsScreen` with tab row (from `config.withDefaultGroup().groups`) + empty state prompting import; MainActivity sets content with theme; Koin wiring. CI is the only build check for this task.
+- [ ] **Step 5: Implement Android shell** — DataStore repository (SAF via `contentResolver.openInputStream`/`openOutputStream` with persisted URI permissions), import → parse → save (failure → user-visible message via returned `Result`), export → `toYaml()`; `GroupTabsScreen` with tab row (from `config.withDefaultGroup().groups`) + empty state prompting import; MainActivity sets content with theme; Koin wiring. CI is the only build check for this task.
 - [ ] **Step 6: Run** `nix develop -c ./gradlew :shared:jvmTest` — Expected: PASS (shell compiles in CI only).
 - [ ] **Step 7: Commit** `feat: android shell with datastore config and saf import/export`
 
