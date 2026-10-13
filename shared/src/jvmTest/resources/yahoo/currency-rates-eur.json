@@ -1,0 +1,21 @@
+{
+  "quoteResponse": {
+    "result": [
+      {
+        "language": "en-US",
+        "region": "US",
+        "quoteType": "CURRENCY",
+        "typeDisp": "Currency",
+        "currency": "USD",
+        "marketState": "REGULAR",
+        "exchange": "CCY",
+        "fullExchangeName": "CCY",
+        "exchangeDataDelayedBy": 0,
+        "symbol": "EURUSD=X",
+        "shortName": "EUR/USD",
+        "regularMarketPrice": { "raw": 1.1, "fmt": "1.10" }
+      }
+    ],
+    "error": null
+  }
+}

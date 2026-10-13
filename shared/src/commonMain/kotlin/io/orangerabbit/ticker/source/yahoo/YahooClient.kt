@@ -19,6 +19,7 @@ import io.ktor.http.Url
 import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
 import io.orangerabbit.ticker.asset.AssetQuote
+import io.orangerabbit.ticker.asset.CurrencyRates
 import kotlinx.coroutines.CancellationException
 
 // YahooClient is a client for the Yahoo Finance quote API ported from the CLI's
@@ -41,7 +42,7 @@ class YahooClient(
         }
 
         return try {
-            Result.success(fetchQuotes(symbols))
+            Result.success(transformResponseQuotes(fetchQuotes(symbols, quoteFields)))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -49,16 +50,44 @@ class YahooClient(
         }
     }
 
-    private suspend fun fetchQuotes(symbols: List<String>): List<AssetQuote> {
+    // getCurrencyRates accepts ISO 4217 currency codes and a target ISO 4217 currency code
+    // and returns a conversion rate for each of the input currencies to the target currency.
+    // Ported from the CLI's GetCurrencyRates.
+    suspend fun getCurrencyRates(fromCurrencies: List<String>, toCurrency: String): Result<CurrencyRates> {
+        val to = if (toCurrency.isEmpty()) "USD" else toCurrency
+
+        // Create currency pair symbols in format "FROMTO=X" (e.g., "EURUSD=X")
+        val pairSymbols = LinkedHashSet<String>()
+        for (fromCurrency in fromCurrencies) {
+            if (fromCurrency.isEmpty() || fromCurrency == to) {
+                continue
+            }
+            pairSymbols.add(fromCurrency.uppercase() + to + "=X")
+        }
+
+        if (pairSymbols.isEmpty()) {
+            return Result.success(CurrencyRates(emptyMap()))
+        }
+
+        return try {
+            Result.success(transformCurrencyRateQuotes(fetchQuotes(pairSymbols.toList(), currencyRateFields), to))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(Exception("failed to get currency rates: ${e.message}", e))
+        }
+    }
+
+    private suspend fun fetchQuotes(symbols: List<String>, fields: List<String>): List<ResponseQuote> {
         var session = sessionStore.get()
         if (session == null) {
             session = refresh()
         }
 
-        var response = requestQuotes(symbols, session)
+        var response = requestQuotes(symbols, fields, session)
         if (response.status.value >= 400) {
             session = refresh()
-            response = requestQuotes(symbols, session)
+            response = requestQuotes(symbols, fields, session)
         }
 
         if (response.status.value != HttpStatusCode.OK.value) {
@@ -66,13 +95,11 @@ class YahooClient(
         }
 
         val body = response.bodyAsText()
-        val result = try {
-            parseQuoteResponse(body)
+        return try {
+            parseQuoteResponse(body).quoteResponse.result
         } catch (e: Exception) {
             throw IllegalStateException("failed to decode response: ${e.message}", e)
         }
-
-        return transformResponseQuotes(result.quoteResponse.result)
     }
 
     private suspend fun refresh(): YahooSession {
@@ -90,11 +117,11 @@ class YahooClient(
         return session
     }
 
-    private suspend fun requestQuotes(symbols: List<String>, session: YahooSession): HttpResponse =
+    private suspend fun requestQuotes(symbols: List<String>, fields: List<String>, session: YahooSession): HttpResponse =
         try {
             http.get("$baseURL/v7/finance/quote") {
                 url {
-                    parameters.append("fields", quoteFields.joinToString(","))
+                    parameters.append("fields", fields.joinToString(","))
                     parameters.append("symbols", symbols.joinToString(","))
                     parameters.append("formatted", "true")
                     parameters.append("lang", "en-US")
@@ -302,6 +329,8 @@ class YahooClient(
             "fiftyTwoWeekLow",
             "marketCap",
         )
+
+        private val currencyRateFields = listOf("currency", "regularMarketPrice")
 
         private val sessionIdRegex = Regex("sessionId=(?:([A-Za-z0-9_-]*))")
         private val csrfTokenRegex = Regex("(?:gcrumb|csrfToken|csrf)=(?:([A-Za-z0-9_-]*))")

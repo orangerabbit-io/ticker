@@ -3,15 +3,19 @@ package io.orangerabbit.ticker.source.yahoo
 import io.orangerabbit.ticker.asset.AssetClass
 import io.orangerabbit.ticker.asset.AssetQuote
 import io.orangerabbit.ticker.asset.Currency
+import io.orangerabbit.ticker.asset.CurrencyRate
+import io.orangerabbit.ticker.asset.CurrencyRates
 import io.orangerabbit.ticker.asset.ExchangeInfo
 import io.orangerabbit.ticker.asset.ExchangeState
 import io.orangerabbit.ticker.asset.Meta
 import io.orangerabbit.ticker.asset.QuoteExtended
 import io.orangerabbit.ticker.asset.QuotePrice
 import io.orangerabbit.ticker.asset.QuoteSource
+import io.orangerabbit.ticker.asset.minorUnitForCurrencyCode
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlin.math.pow
 
 // Response models ported from the CLI's models.go.
 
@@ -176,3 +180,31 @@ fun transformResponseQuote(responseQuote: ResponseQuote): AssetQuote {
 // transformResponseQuotes transforms the quotes returned by the API into a list of AssetQuote
 fun transformResponseQuotes(responseQuotes: List<ResponseQuote>): List<AssetQuote> =
     responseQuotes.map(::transformResponseQuote)
+
+// transformCurrencyRateQuotes transforms currency pair quotes (e.g. "EURUSD=X") into currency
+// rates: the from currency is derived by stripping the "=X" pair suffix and then the target
+// currency suffix and, when the currency has a minor form (e.g. GBP -> GBp), a rate for the
+// minor currency is added scaled by its minor unit. Ported from the CLI's GetCurrencyRates.
+fun transformCurrencyRateQuotes(responseQuotes: List<ResponseQuote>, toCurrency: String): CurrencyRates {
+    val rates = mutableMapOf<String, CurrencyRate>()
+
+    for (responseQuote in responseQuotes) {
+        val fromCurrency = responseQuote.symbol.removeSuffix("=X").removeSuffix(toCurrency)
+        rates[fromCurrency] = CurrencyRate(
+            from = fromCurrency,
+            to = toCurrency,
+            rate = responseQuote.regularMarketPrice.raw,
+        )
+
+        val minorUnit = minorUnitForCurrencyCode(fromCurrency)
+        if (minorUnit != null) {
+            rates[minorUnit.code] = CurrencyRate(
+                from = minorUnit.code,
+                to = toCurrency,
+                rate = responseQuote.regularMarketPrice.raw * 10.0.pow(-minorUnit.unit),
+            )
+        }
+    }
+
+    return CurrencyRates(rates)
+}
