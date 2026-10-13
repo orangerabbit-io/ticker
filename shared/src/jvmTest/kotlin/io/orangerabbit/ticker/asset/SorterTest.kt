@@ -33,8 +33,8 @@ class SorterTest {
         val c = asset("C", changePercent = 5.0)
         val d = asset("D", changePercent = 99.0, isActive = false)
 
-        // actives sorted by changePercent desc; inactives keep their relative order after them
-        assertEquals(listOf("C", "A", "B", "D"), symbols(newSorter(null)(listOf(a, b, c, d))))
+        // actives sorted by changePercent desc; inactives sorted the same way, after them
+        assertEquals(listOf("C", "A", "D", "B"), symbols(newSorter(null)(listOf(a, b, c, d))))
     }
 
     @Test
@@ -57,12 +57,13 @@ class SorterTest {
                 asset("A", value = 100.0),
                 asset("B", value = 300.0),
                 asset("C", value = 200.0),
-                asset("D", value = 999.0, isActive = false),
+                asset("D", value = 500.0, isActive = false),
+                asset("E", value = 999.0, isActive = false),
             ),
         )
 
-        // actives by value desc; the inactive asset sorts after them despite the highest value
-        assertEquals(listOf("B", "C", "A", "D"), symbols(sorted))
+        // actives by value desc; inactives sorted by value desc after them
+        assertEquals(listOf("B", "C", "A", "E", "D"), symbols(sorted))
     }
 
     @Test
@@ -87,7 +88,7 @@ class SorterTest {
         val c = asset("C", changePercent = 5.0)
         val d = asset("D", changePercent = 99.0, isActive = false)
 
-        assertEquals(listOf("C", "A", "B", "D"), symbols(newSorter("bogus")(listOf(a, b, c, d))))
-        assertEquals(listOf("C", "A", "B", "D"), symbols(newSorter("")(listOf(a, b, c, d))))
+        assertEquals(listOf("C", "A", "D", "B"), symbols(newSorter("bogus")(listOf(a, b, c, d))))
+        assertEquals(listOf("C", "A", "D", "B"), symbols(newSorter("")(listOf(a, b, c, d))))
     }
 }

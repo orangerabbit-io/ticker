@@ -15,10 +15,12 @@ private fun sortByUser(assets: List<Asset>): List<Asset> =
 
 private fun sortByValue(assets: List<Asset>): List<Asset> {
     val (active, inactive) = assets.partition { it.exchange.isActive }
-    return active.sortedByDescending { it.position.value } + inactive
+    return active.sortedByDescending { it.position.value } +
+        inactive.sortedByDescending { it.position.value }
 }
 
 private fun sortByChange(assets: List<Asset>): List<Asset> {
     val (active, inactive) = assets.partition { it.exchange.isActive }
-    return active.sortedByDescending { it.quotePrice.changePercent } + inactive
+    return active.sortedByDescending { it.quotePrice.changePercent } +
+        inactive.sortedByDescending { it.quotePrice.changePercent }
 }
