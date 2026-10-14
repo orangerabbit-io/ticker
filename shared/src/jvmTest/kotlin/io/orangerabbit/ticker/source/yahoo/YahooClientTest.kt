@@ -16,6 +16,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 // PreloadingSessionStore models a persisted session that only becomes visible after a
@@ -334,5 +335,94 @@ class YahooClientTest {
             current = current.cause
         }
         assertTrue(error.message.orEmpty().contains("failed to make request"), "was <${error.message}>")
+    }
+
+    @Test
+    fun `search returns symbol results with cookies and no crumb`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val store = InMemorySessionStore()
+        store.put(YahooSession(cookies = listOf("A3" to "seed-a3"), crumb = "seed.crumb"))
+        val replies = listOf(
+            MockReply(HttpStatusCode.OK, body = fixture("search-apple.json")),
+        )
+        val client = YahooClient(mockClient(replies, recorded), store)
+
+        val result = client.search("apple")
+
+        val results = result.getOrThrow()
+        assertEquals(2, results.size)
+        assertEquals("AAPL", results[0].symbol)
+        assertEquals("BTC-USD", results[1].symbol)
+        val request = recorded.single()
+        assertEquals("/v1/finance/search", request.url.encodedPath)
+        assertEquals("apple", request.url.parameters["q"])
+        assertEquals("10", request.url.parameters["quotesCount"])
+        assertEquals("0", request.url.parameters["newsCount"])
+        assertEquals("en-US", request.url.parameters["lang"])
+        assertEquals("US", request.url.parameters["region"])
+        assertTrue(cookieHeader(request).contains("A3=seed-a3"))
+        assertNull(request.url.parameters["crumb"], "search must not send a crumb")
+    }
+
+    @Test
+    fun `search establishes session when none is stored`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val store = InMemorySessionStore()
+        val replies = listOf(
+            MockReply(
+                HttpStatusCode.OK,
+                headers = setCookieHeaders("A3=cookie-a3-value; Path=/; Domain=.yahoo.com", "F=d; Path=/"),
+            ),
+            MockReply(HttpStatusCode.OK, body = "foo.bar"),
+            MockReply(HttpStatusCode.OK, body = fixture("search-apple.json")),
+        )
+        val client = YahooClient(mockClient(replies, recorded), store)
+
+        val result = client.search("apple")
+
+        assertEquals(2, result.getOrThrow().size)
+        assertEquals(3, recorded.size)
+        assertTrue(recorded[1].url.toString().contains("/v1/test/getcrumb"))
+        val request = recorded[2]
+        assertEquals("/v1/finance/search", request.url.encodedPath)
+        assertTrue(cookieHeader(request).contains("A3=cookie-a3-value"))
+        assertNull(request.url.parameters["crumb"], "search must not send a crumb")
+    }
+
+    @Test
+    fun `search awaits persisted session through preload`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val store = PreloadingSessionStore(YahooSession(cookies = listOf("A3" to "seed-a3"), crumb = "seed.crumb"))
+        val replies = listOf(
+            MockReply(HttpStatusCode.OK, body = fixture("search-apple.json")),
+        )
+        val client = YahooClient(mockClient(replies, recorded), store)
+
+        val result = client.search("apple")
+
+        assertEquals(2, result.getOrThrow().size)
+        assertFalse(store.getBeforePreloadCompleted, "get() must not run before the preload completes")
+        assertEquals(1, recorded.size)
+        assertTrue(cookieHeader(recorded[0]).contains("A3=seed-a3"))
+    }
+
+    @Test
+    fun `search rate limit failure is sanitized`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val store = InMemorySessionStore()
+        store.put(YahooSession(cookies = listOf("A3" to "seed-a3"), crumb = "seed.crumb"))
+        val replies = listOf(
+            MockReply(HttpStatusCode.TooManyRequests, body = "Too Many Requests"),
+        )
+        val client = YahooClient(mockClient(replies, recorded), store)
+
+        val result = client.search("apple")
+
+        val message = assertNotNull(result.exceptionOrNull()).message.orEmpty()
+        assertTrue(message.contains("429"), "expected status code in message but was <$message>")
+        assertFalse(message.contains("Too Many Requests"), "response body leaked in <$message>")
+        assertFalse(message.contains("A3=seed-a3"), "cookies leaked in <$message>")
+        assertFalse(message.contains("query1.finance.yahoo.com"), "request url leaked in <$message>")
+        assertEquals("/v1/finance/search", recorded.single().url.encodedPath)
     }
 }

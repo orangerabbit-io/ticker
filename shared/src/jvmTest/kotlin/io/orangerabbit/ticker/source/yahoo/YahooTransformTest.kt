@@ -3,6 +3,7 @@ package io.orangerabbit.ticker.source.yahoo
 import io.orangerabbit.ticker.asset.AssetClass
 import io.orangerabbit.ticker.asset.ExchangeState
 import io.orangerabbit.ticker.asset.QuoteSource
+import io.orangerabbit.ticker.source.SearchResultSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -72,6 +73,42 @@ class YahooTransformTest {
         assertEquals(AssetClass.STOCK, getAssetClass("EQUITY"))
         assertEquals(AssetClass.UNKNOWN, getAssetClass("MUTUALFUND"))
         assertEquals(AssetClass.UNKNOWN, getAssetClass(""))
+    }
+
+    @Test
+    fun `transforms search results to symbol search results`() {
+        val results = transformSearchQuotes(parseSearchResponse(fixture("search-apple.json")))
+
+        assertEquals(2, results.size)
+
+        val aapl = results[0]
+        assertEquals("AAPL", aapl.symbol)
+        assertEquals("Apple Inc.", aapl.name)
+        assertEquals("NASDAQ", aapl.exchange)
+        assertEquals(SearchResultSource.YAHOO, aapl.source)
+
+        val btc = results[1]
+        assertEquals("BTC-USD", btc.symbol)
+        assertEquals("Bitcoin USD", btc.name)
+        assertEquals("CCC", btc.exchange)
+        assertEquals(SearchResultSource.YAHOO, btc.source)
+    }
+
+    @Test
+    fun `search name comes from shortname and exchange from exchDisp`() {
+        val quote = SearchResponseQuote(
+            exchange = "NMS",
+            shortname = "Short Name",
+            longname = "Long Name",
+            exchDisp = "NASDAQ",
+            quoteType = "EQUITY",
+            symbol = "AAPL",
+        )
+
+        val result = transformSearchQuotes(SearchResponse(quotes = listOf(quote))).single()
+
+        assertEquals("Short Name", result.name)
+        assertEquals("NASDAQ", result.exchange)
     }
 
     private fun assertClose(expected: Double, actual: Double) {

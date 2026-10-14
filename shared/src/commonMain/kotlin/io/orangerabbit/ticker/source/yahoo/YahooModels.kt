@@ -12,6 +12,8 @@ import io.orangerabbit.ticker.asset.QuoteExtended
 import io.orangerabbit.ticker.asset.QuotePrice
 import io.orangerabbit.ticker.asset.QuoteSource
 import io.orangerabbit.ticker.asset.minorUnitForCurrencyCode
+import io.orangerabbit.ticker.source.SearchResultSource
+import io.orangerabbit.ticker.source.SymbolSearchResult
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -208,3 +210,38 @@ fun transformCurrencyRateQuotes(responseQuotes: List<ResponseQuote>, toCurrency:
 
     return CurrencyRates(rates)
 }
+
+// Search response models for the symbol search API. Quote keys are camelCase exactly
+// as observed in live responses (shortname, longname, exchDisp), so no SerialName
+// annotations are needed.
+
+@Serializable
+data class SearchResponse(
+    val quotes: List<SearchResponseQuote> = emptyList(),
+)
+
+@Serializable
+data class SearchResponseQuote(
+    val exchange: String = "",
+    val shortname: String = "",
+    val longname: String = "",
+    val exchDisp: String = "",
+    val quoteType: String = "",
+    val symbol: String = "",
+)
+
+private val searchJson = Json { ignoreUnknownKeys = true }
+
+fun parseSearchResponse(body: String): SearchResponse = searchJson.decodeFromString(SearchResponse.serializer(), body)
+
+// transformSearchQuotes transforms search hits into symbol search results: the display
+// name comes from the short name and the exchange from the display exchange name.
+fun transformSearchQuotes(response: SearchResponse): List<SymbolSearchResult> =
+    response.quotes.map {
+        SymbolSearchResult(
+            symbol = it.symbol,
+            name = it.shortname,
+            exchange = it.exchDisp,
+            source = SearchResultSource.YAHOO,
+        )
+    }

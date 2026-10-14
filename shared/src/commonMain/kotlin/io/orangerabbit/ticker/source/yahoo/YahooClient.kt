@@ -20,6 +20,7 @@ import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
 import io.orangerabbit.ticker.asset.AssetQuote
 import io.orangerabbit.ticker.asset.CurrencyRates
+import io.orangerabbit.ticker.source.SymbolSearchResult
 import kotlinx.coroutines.CancellationException
 
 // YahooQuoteSource is the quote port consumed by the poller: asset quotes and currency
@@ -128,6 +129,32 @@ class YahooClient(
         return session
     }
 
+    // search returns symbol search hits for a free-text query. Search requests are
+    // authenticated with session cookies alone: unlike quote requests they carry no
+    // crumb, but a missing stored session still runs the full handshake.
+    suspend fun search(query: String): Result<List<SymbolSearchResult>> {
+        return try {
+            // await any deferred session initialization first so a persisted session is
+            // used on cold start instead of a redundant handshake racing the load
+            sessionStore.preload()
+            var session = sessionStore.get()
+            if (session == null) {
+                session = refresh()
+            }
+
+            val response = requestSearch(query, session)
+            if (response.status.value != HttpStatusCode.OK.value) {
+                throw transportFailure("failed to make request", ResponseException(response, ""))
+            }
+
+            Result.success(transformSearchQuotes(parseSearchResponse(response.bodyAsText())))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(Exception("failed to search: ${e.message}", e))
+        }
+    }
+
     private suspend fun requestQuotes(symbols: List<String>, fields: List<String>, session: YahooSession): HttpResponse =
         try {
             http.get("$baseURL/v7/finance/quote") {
@@ -141,6 +168,30 @@ class YahooClient(
                     if (session.crumb.isNotEmpty()) {
                         parameters.append("crumb", session.crumb)
                     }
+                }
+                header("Authority", "query1.finance.yahoo.com")
+                header(HttpHeaders.Accept, "*/*")
+                header(HttpHeaders.AcceptLanguage, defaultAcceptLanguage)
+                header(HttpHeaders.Origin, baseURL)
+                header(HttpHeaders.UserAgent, defaultUserAgent)
+                cookieHeader(session.cookies)
+                expectSuccess = false
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw transportFailure("failed to make request", e)
+        }
+
+    private suspend fun requestSearch(query: String, session: YahooSession): HttpResponse =
+        try {
+            http.get("$baseURL/v1/finance/search") {
+                url {
+                    parameters.append("q", query)
+                    parameters.append("quotesCount", "10")
+                    parameters.append("newsCount", "0")
+                    parameters.append("lang", "en-US")
+                    parameters.append("region", "US")
                 }
                 header("Authority", "query1.finance.yahoo.com")
                 header(HttpHeaders.Accept, "*/*")
