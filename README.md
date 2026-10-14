@@ -11,6 +11,12 @@ An Android port of [achannarasappa/ticker](https://github.com/achannarasappa/tic
 - **Quote sources**: Yahoo Finance (equities) and Coinbase (crypto)
 - **Foreground polling** with a 30-second minimum refresh interval
 
+## Usage
+
+**Start from scratch** (the normal path): tap **Symbols** and add a watchlist symbol — the configuration is created on the spot and live quotes start immediately. **Edit lots** adds cost-basis entries (quantity, unit cost, fixed fees; multiple lots per symbol). **Settings** manages refresh interval, sort order, display flags, and groups. No file needed.
+
+**Or import**: if you already run the terminal `ticker`, tap **Import** and pick your `.ticker.yaml` — watchlist, lots, and groups carry over unchanged. **Export** writes your current configuration back out.
+
 ## Building
 
 Run the test suite (requires Nix):
@@ -42,4 +48,3 @@ Nothing else. No data leaves your device beyond these requests.
 
 GPL-3.0
 
-Release signing configured (ticker-release key).
