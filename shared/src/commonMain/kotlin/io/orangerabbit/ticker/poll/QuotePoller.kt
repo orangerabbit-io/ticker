@@ -131,16 +131,26 @@ class QuotePoller(
 
     private fun switchGroup(cfg: TickerConfig, groupIndex: Int) {
         val groups = cfg.groups
-        resolved = if (groups.isEmpty()) {
+        val next = if (groups.isEmpty()) {
             null
         } else {
             resolveGroup(groups[groupIndex.coerceIn(0, groups.lastIndex)], symbolMap)
+        }
+        // restarting the same identities (config reload, resume from background, group
+        // re-select) keeps the cached quotes and the emitted portfolio visible — stale
+        // but honest — while they are only cleared when the reconciled identities
+        // actually change
+        val previous = resolved
+        resolved = next
+        if (next != null && sameIdentities(previous, next)) {
+            _state.update { it.copy(group = next.group) }
+            return
         }
         yahooQuotes = emptyList()
         coinbaseQuotes = emptyList()
         _state.update {
             it.copy(
-                group = resolved?.group,
+                group = next?.group,
                 assets = emptyList(),
                 summary = null,
                 unavailable = emptyList(),
@@ -148,6 +158,17 @@ class QuotePoller(
             )
         }
     }
+
+    // sameIdentities compares the quote-relevant identity of two resolutions: the
+    // deduplicated source-native fetch sets plus every configured ticker identity
+    // mapped to them, so a renamed/added/removed symbol still clears the caches.
+    private fun sameIdentities(current: ResolvedGroup?, next: ResolvedGroup): Boolean =
+        current != null &&
+            current.yahooSymbols == next.yahooSymbols &&
+            current.coinbaseProducts == next.coinbaseProducts &&
+            current.unresolved == next.unresolved &&
+            current.tickerByYahooSymbol == next.tickerByYahooSymbol &&
+            current.tickerByCoinbaseProduct == next.tickerByCoinbaseProduct
 
     private suspend fun refresh() {
         refreshMutex.withLock {

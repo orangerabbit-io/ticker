@@ -246,6 +246,52 @@ class QuotePollerTest {
     }
 
     @Test
+    fun `restarting the same group preserves stale quotes when the resume fetch fails`() = runTest {
+        var fail = false
+        val yahoo = FakeYahoo(quotes = {
+            if (fail) Result.failure(Exception("boom")) else Result.success(listOf(quote("AAPL")))
+        })
+        val poller = QuotePoller(yahoo, FakeCoinbase(), fakeSymbols(), clock = { testScheduler.currentTime })
+        val config = TickerConfig(interval = 30, groups = listOf(ConfigGroup(name = "g", watchlist = listOf("AAPL"))))
+
+        poller.start(config)
+        assertEquals(listOf("AAPL"), poller.state.value.assets.map { it.symbol })
+        poller.stop()
+
+        fail = true
+        poller.start(config)
+
+        val state = poller.state.value
+        assertEquals(listOf("AAPL"), state.assets.map { it.symbol })
+        assertNotNull(state.error)
+
+        poller.stop()
+    }
+
+    @Test
+    fun `switching to a group with different identities clears the previous quotes`() = runTest {
+        var fail = false
+        val yahoo = FakeYahoo(quotes = { symbols ->
+            if (fail) Result.failure(Exception("boom")) else Result.success(symbols.map { quote(it) })
+        })
+        val poller = QuotePoller(yahoo, FakeCoinbase(), fakeSymbols(), clock = { testScheduler.currentTime })
+        val groups = listOf(
+            ConfigGroup(name = "a", watchlist = listOf("AAPL")),
+            ConfigGroup(name = "b", watchlist = listOf("MSFT")),
+        )
+
+        poller.start(TickerConfig(interval = 30, groups = groups), groupIndex = 0)
+        assertEquals(listOf("AAPL"), poller.state.value.assets.map { it.symbol })
+
+        fail = true
+        poller.selectGroup(1)
+
+        assertTrue(poller.state.value.assets.isEmpty())
+
+        poller.stop()
+    }
+
+    @Test
     fun `start after stop resumes polling cleanly`() = runTest {
         val yahoo = FakeYahoo(quotes = { Result.success(listOf(quote("AAPL"))) })
         val poller = QuotePoller(yahoo, FakeCoinbase(), fakeSymbols(), clock = { testScheduler.currentTime })
