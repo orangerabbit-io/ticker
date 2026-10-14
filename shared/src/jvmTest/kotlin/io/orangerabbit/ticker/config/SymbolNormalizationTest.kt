@@ -19,6 +19,14 @@ class SymbolNormalizationTest {
     }
 
     @Test
+    fun `Lot normalized trims and uppercases the symbol and preserves the rest`() {
+        assertEquals(
+            Lot(symbol = "BTC-USD", quantity = 1.0, unitCost = 2.0, fixedCost = 3.0),
+            Lot(symbol = " btc-usd ", quantity = 1.0, unitCost = 2.0, fixedCost = 3.0).normalized(),
+        )
+    }
+
+    @Test
     fun `normalized uppercases watchlist entries and lot symbols and preserves everything else`() {
         val config = TickerConfig(
             interval = 30,

@@ -10,6 +10,7 @@ import io.orangerabbit.ticker.config.TickerConfig
 import io.orangerabbit.ticker.config.addGroup
 import io.orangerabbit.ticker.config.defaultGroupName
 import io.orangerabbit.ticker.config.editGroup
+import io.orangerabbit.ticker.config.normalized
 import io.orangerabbit.ticker.config.removeGroup
 import io.orangerabbit.ticker.config.renameGroup
 import io.orangerabbit.ticker.config.replaced
@@ -252,14 +253,18 @@ class HomeViewModel(
     }
 
     // addLot always appends to the acted-on group: a symbol can carry several cost-basis
-    // lots.
+    // lots. The lot symbol is normalized here — the single mutation boundary — so it
+    // always matches the polled symbol and the exact-key cost-basis join.
     fun addLot(lot: Lot) {
-        editTarget(targetAt(selectedGroupIndex())) { group -> group.copy(lots = group.lots + lot) }
+        editTarget(targetAt(selectedGroupIndex())) { group ->
+            group.copy(lots = group.lots + lot.normalized())
+        }
     }
 
     // updateLot replaces the lot the user selected: its content is captured at action
     // time and re-found when the queued mutation runs, so a queued change to the same
-    // lot list cannot shift the edit onto a different lot.
+    // lot list cannot shift the edit onto a different lot. The replacement is normalized
+    // like every other add path.
     fun updateLot(index: Int, lot: Lot) {
         val target = targetAt(selectedGroupIndex())
         val previous = lotAt(target, index) ?: return
@@ -268,7 +273,7 @@ class HomeViewModel(
             if (at < 0) {
                 group
             } else {
-                group.copy(lots = group.lots.mapIndexed { i, current -> if (i == at) lot else current })
+                group.copy(lots = group.lots.mapIndexed { i, current -> if (i == at) lot.normalized() else current })
             }
         }
     }

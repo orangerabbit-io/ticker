@@ -38,16 +38,21 @@ const val defaultGroupName = "default"
 // and add path stores one spelling and duplicates can be detected regardless of case.
 fun normalizeSymbol(raw: String): String = raw.trim().uppercase()
 
+// Lot.normalized normalizes the lot's symbol like every other add path — the poller and
+// the cost-basis join match symbols exactly, so a lowercase lot symbol would never
+// resolve. Callers normalize at the mutation boundary; the editor passes trimmed input.
+fun Lot.normalized(): Lot = copy(symbol = normalizeSymbol(symbol))
+
 // normalized uppercases every watchlist entry and lot symbol, at the top level and in
 // every group, and preserves everything else (group names, costs, flags) untouched.
 fun TickerConfig.normalized(): TickerConfig =
     copy(
         watchlist = watchlist.map(::normalizeSymbol),
-        lots = lots.map { it.copy(symbol = normalizeSymbol(it.symbol)) },
+        lots = lots.map { it.normalized() },
         groups = groups.map { group ->
             group.copy(
                 watchlist = group.watchlist.map(::normalizeSymbol),
-                lots = group.lots.map { it.copy(symbol = normalizeSymbol(it.symbol)) },
+                lots = group.lots.map { it.normalized() },
             )
         },
     )
