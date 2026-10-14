@@ -63,19 +63,25 @@ class ConfigRepositoryImpl(private val context: Context) : ConfigRepository {
         val imported = parseTickerConfig(yaml).getOrElse { e ->
             return Result.failure(Exception(e.message ?: "failed to parse ticker configuration", e))
         }
-        takePersistableUriPermission(uriString, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        save(imported)
-        return Result.success(Unit)
+        return try {
+            takePersistableUriPermission(uriString, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            save(imported)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(Exception(e.message ?: "failed to save the imported configuration", e))
+        }
     }
 
     override suspend fun export(uriString: String): Result<Unit> {
-        val stored = context.configDataStore.data.first()[configJsonKey]
-            ?: return Result.failure(Exception("no configuration to export"))
-        val current = parseTickerConfigJson(stored).getOrElse { e ->
-            return Result.failure(Exception(e.message ?: "stored configuration is invalid", e))
-        }
-        val yaml = current.toYaml()
         return try {
+            val stored = context.configDataStore.data.first()[configJsonKey]
+                ?: return Result.failure(Exception("no configuration to export"))
+            val current = parseTickerConfigJson(stored).getOrElse { e ->
+                return Result.failure(Exception(e.message ?: "stored configuration is invalid", e))
+            }
+            val yaml = current.toYaml()
             withContext(Dispatchers.IO) {
                 takePersistableUriPermission(uriString, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                 val uri = Uri.parse(uriString)
@@ -87,7 +93,7 @@ class ConfigRepositoryImpl(private val context: Context) : ConfigRepository {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(Exception(e.message ?: "failed to export the configuration", e))
         }
     }
 

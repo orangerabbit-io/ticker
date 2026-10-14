@@ -58,6 +58,7 @@ private fun TickerApp(repository: ConfigRepository) {
                 )
             }
         },
+        onError = { actionError = it },
     )
 
     GroupTabsScreen(
