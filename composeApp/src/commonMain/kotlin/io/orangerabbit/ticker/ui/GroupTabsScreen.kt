@@ -838,9 +838,14 @@ private fun LotEditorSheet(
     var unitCost by remember { mutableStateOf("") }
     var fixedCost by remember { mutableStateOf("") }
 
-    // a config change can replace the lots under the sheet (an import rewrites the
-    // config): an editing index past the new list is stale — the sheet falls back to
-    // the list instead of editing or deleting the wrong row
+    // Sheet actions return to the list before mutating and the view model queues and
+    // serializes mutations, so an open editor's row index is only valid for the lots
+    // list it was opened against: a queued delete landing late or an import rewriting
+    // the config can replace lots in place — the index may even stay in range while it
+    // now points at a different row. Any lots change while a row is being edited
+    // resets the sheet to the list instead of capturing the wrong row; a blank new-lot
+    // editor (editingIndex null) captures no row and stays put. Until that reset lands,
+    // an out-of-range index is treated as no editor at all.
     val editor = when (val mode = lotMode) {
         is LotSheetMode.Editor -> {
             val index = mode.editingIndex
@@ -848,10 +853,13 @@ private fun LotEditorSheet(
         }
         LotSheetMode.List -> null
     }
+    val lastLots = remember { mutableStateOf(lots) }
     LaunchedEffect(lots, lotMode) {
-        val index = (lotMode as? LotSheetMode.Editor)?.editingIndex
-        if (index != null && index !in lots.indices) {
-            lotMode = LotSheetMode.List
+        if (lastLots.value != lots) {
+            lastLots.value = lots
+            if ((lotMode as? LotSheetMode.Editor)?.editingIndex != null) {
+                lotMode = LotSheetMode.List
+            }
         }
     }
     val editingIndex = editor?.editingIndex
