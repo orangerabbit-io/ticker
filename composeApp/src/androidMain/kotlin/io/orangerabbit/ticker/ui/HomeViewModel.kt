@@ -7,6 +7,7 @@ import io.orangerabbit.ticker.config.TickerConfig
 import io.orangerabbit.ticker.poll.PollState
 import io.orangerabbit.ticker.poll.QuotePoller
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,6 +40,7 @@ class HomeViewModel(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var observation: Job? = null
     private var restart: Job? = null
+    private var foreground: CompletableJob? = null
     private var lastConfig: TickerConfig? = null
 
     // start begins config observation and is idempotent, so the composition-level start
@@ -48,6 +50,7 @@ class HomeViewModel(
     // an error to display. A null config stops the poller (import empty state).
     fun start() {
         if (observation?.isActive == true) return
+        foreground = SupervisorJob()
         observation = scope.launch {
             configRepo.config.collect { config ->
                 if (config != lastConfig) {
@@ -72,24 +75,36 @@ class HomeViewModel(
         }
     }
 
-    // stop releases the poller while the app is in the background; the last emitted
-    // poll state is retained for the next start.
+    // stop releases the poller and cancels every foreground-owned action job (manual
+    // refresh, group selection — including work still queued behind another refresh)
+    // while the app is in the background; the last emitted poll state is retained for
+    // the next start. No manual quote work outlives ON_STOP.
     fun stop() {
         observation?.cancel()
         observation = null
         restart?.cancel()
         restart = null
+        foreground?.cancel()
+        foreground = null
         poller.stop()
     }
 
     fun refresh() {
-        scope.launch { poller.refreshNow() }
+        launchForeground { poller.refreshNow() }
     }
 
     fun selectGroup(index: Int) {
         if (_selectedGroup.value == index) return
         _selectedGroup.value = index
-        scope.launch { poller.selectGroup(index) }
+        launchForeground { poller.selectGroup(index) }
+    }
+
+    // launchForeground runs manual quote work as a child of the foreground-owned job so
+    // stop() can cancel it (and anything it queued) at ON_STOP. With no foreground job
+    // there is no lifecycle ownership, so the action is not started at all.
+    private fun launchForeground(block: suspend CoroutineScope.() -> Unit) {
+        val owner = foreground ?: return
+        scope.launch(owner) { block() }
     }
 
     fun addSymbol(symbol: String) {
