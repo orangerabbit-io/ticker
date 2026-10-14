@@ -8,6 +8,7 @@ coroutines = "1.10.2"
 agp = "9.1.1"
 activityCompose = "1.12.0"
 kaml = "0.72.0"
+datastore = "1.1.7"
 # AGP 9.x pairs with the Gradle 9.3.1 wrapper (see gradle/wrapper/gradle-wrapper.properties).
 
 [libraries]
@@ -21,6 +22,7 @@ kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-t
 koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
 
 [plugins]
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

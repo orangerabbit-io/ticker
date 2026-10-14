@@ -30,6 +30,9 @@ kotlin {
         androidMain.dependencies {
             implementation(compose.preview)
             implementation(libs.androidx.activity.compose)
+            implementation(libs.androidx.datastore.preferences)
+            implementation(libs.koin.core)
+            implementation(libs.ktor.client.okhttp)
         }
     }
 }
