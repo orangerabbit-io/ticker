@@ -43,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -51,7 +52,21 @@ import io.orangerabbit.ticker.config.Lot
 import io.orangerabbit.ticker.config.TickerConfig
 import io.orangerabbit.ticker.config.withDefaultGroup
 import io.orangerabbit.ticker.poll.PollState
+import io.orangerabbit.ticker.source.SearchResultSource
+import io.orangerabbit.ticker.source.SymbolSearchOutcome
+import io.orangerabbit.ticker.source.SymbolSearchResult
 import kotlinx.coroutines.launch
+
+// SearchState is the add-symbol sheet's search snapshot: the live query the debounced
+// search runs against, whether a search is pending or in flight, and the outcome of the
+// last completed search for the current query (typing a new query clears it until the
+// new outcome lands). The whole state is null while idle — nothing typed or the sheet is
+// closed.
+data class SearchState(
+    val query: String,
+    val loading: Boolean,
+    val outcome: SymbolSearchOutcome?,
+)
 
 // SettingsUpdate carries the settings-sheet edits (interval, sort mode, display flags)
 // to the view model as one write; group edits use the dedicated callbacks.
@@ -78,12 +93,14 @@ fun GroupTabsScreen(
     pollState: PollState,
     error: String?,
     selectedGroup: Int,
+    searchState: SearchState?,
     onImportRequested: () -> Unit,
     onExportRequested: () -> Unit,
     onGroupSelected: (Int) -> Unit,
     onRefresh: () -> Unit,
     onAddSymbol: (String) -> Unit,
     onRemoveSymbol: (String) -> Unit,
+    onSearchQueryChanged: (String) -> Unit,
     onAddLot: (Lot) -> Unit,
     onUpdateLot: (Int, Lot) -> Unit,
     onDeleteLot: (Int) -> Unit,
@@ -232,14 +249,19 @@ fun GroupTabsScreen(
     }
 
     if (showSymbolsSheet) {
-        SymbolsSheet(
-            symbols = explicitWatchlist(config, selected),
-            onAdd = {
-                showSymbolsSheet = false
-                onAddSymbol(it)
-            },
+        // adding from search keeps the sheet open so several symbols can be added in
+        // one sitting; closing (dismiss) clears the debounced search back to idle
+        SearchSheet(
+            existing = explicitWatchlist(config, selected),
+            state = searchState,
+            onQueryChanged = onSearchQueryChanged,
+            onAdd = onAddSymbol,
             onRemove = onRemoveSymbol,
-            onDismiss = { showSymbolsSheet = false },
+            onAddExact = onAddSymbol,
+            onDismiss = {
+                showSymbolsSheet = false
+                onSearchQueryChanged("")
+            },
         )
     }
     if (showLotSheet) {
@@ -401,18 +423,29 @@ private fun explicitWatchlist(config: TickerConfig?, index: Int): List<String> {
     }
 }
 
-// SymbolsSheet adds a typed symbol to the selected group's watchlist and removes
-// mistaken entries through the config repository; the poller restarts when the saved
-// config emits. The sheet stays open across removals so several can be done at once.
+// SearchSheet finds symbols to add to the acted-on group (Yahoo and the Coinbase
+// catalog, merged and ranked by the shared SymbolSearch) and removes mistaken entries
+// from its watchlist; the poller restarts when the saved config emits. A result row
+// proposes its symbol and adds it through the same addSymbol path as manual entry
+// (which normalizes and dedupes) — the sheet stays open across adds so several can be
+// done at once, and each added row shows "added" until the query changes. A degraded
+// search surfaces an inline note and never blocks manual entry: the "no matches" row
+// and the permanent "Add exact symbol…" row add the typed query as-is.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SymbolsSheet(
-    symbols: List<String>,
+private fun SearchSheet(
+    existing: List<String>,
+    state: SearchState?,
+    onQueryChanged: (String) -> Unit,
     onAdd: (String) -> Unit,
     onRemove: (String) -> Unit,
+    onAddExact: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var symbol by remember { mutableStateOf("") }
+    val query = state?.query.orEmpty()
+    // row-level add feedback for the current query only; the next query clears it
+    var added by remember(query) { mutableStateOf(emptySet<String>()) }
+    val outcome = state?.outcome
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -424,24 +457,56 @@ private fun SymbolsSheet(
             Text(text = "Symbols", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(
-                value = symbol,
-                onValueChange = { symbol = it },
+                value = query,
+                onValueChange = onQueryChanged,
                 label = { Text("Symbol") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = { onAdd(symbol) },
-                enabled = symbol.isNotBlank(),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Add")
+            if (state?.loading == true) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Searching…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            if (symbols.isNotEmpty()) {
+            if (outcome != null && outcome.results.isEmpty()) {
+                TextButton(
+                    onClick = { onAddExact(query) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("no matches — add $query as an exact symbol")
+                }
+            }
+            outcome?.results?.forEach { result ->
+                SearchResultRow(
+                    result = result,
+                    added = result.symbol in added,
+                    onAdd = {
+                        added = added + result.symbol
+                        onAdd(result.symbol)
+                    },
+                )
+            }
+            if (outcome?.yahooFailed == true) {
+                Text(
+                    text = "Yahoo search unavailable — results may be incomplete",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (outcome?.catalogFailed == true) {
+                Text(
+                    text = "symbol match only — Coinbase catalog unavailable",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (existing.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
                 Text(text = "Watchlist", style = MaterialTheme.typography.labelMedium)
-                symbols.forEach { entry ->
+                existing.forEach { entry ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -457,9 +522,72 @@ private fun SymbolsSheet(
                     }
                 }
             }
+            // the permanent last row: exact-symbol entry never depends on search results
+            TextButton(
+                onClick = { onAddExact(query) },
+                enabled = query.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Add exact symbol…")
+            }
         }
     }
 }
+
+// SearchResultRow shows one proposed symbol — proposed symbol in mono, matched name
+// muted, source tag — with an Add action that stays on the row as "added" feedback for
+// the current query.
+@Composable
+private fun SearchResultRow(
+    result: SymbolSearchResult,
+    added: Boolean,
+    onAdd: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = result.symbol,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = FontFamily.Monospace,
+            )
+            if (result.name.isNotEmpty()) {
+                Text(
+                    text = result.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = result.source.label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(8.dp))
+        if (added) {
+            Text(
+                text = "added",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        } else {
+            TextButton(onClick = onAdd) {
+                Text("Add")
+            }
+        }
+    }
+}
+
+// label is the source tag shown on a result row.
+private val SearchResultSource.label: String
+    get() = when (this) {
+        SearchResultSource.YAHOO -> "Yahoo"
+        SearchResultSource.COINBASE -> "Coinbase"
+    }
 
 // SettingsSheet is the single in-app configuration surface the spec's config lifecycle
 // requires: refresh interval, sort mode, display flags, and group management

@@ -56,6 +56,7 @@ private fun TickerApp(repository: ConfigRepository, viewModel: HomeViewModel) {
     val configError by repository.configError.collectAsState()
     val pollState by viewModel.state.collectAsState()
     val selectedGroup by viewModel.selectedGroup.collectAsState()
+    val searchState by viewModel.searchState.collectAsState()
     val saveError by viewModel.saveError.collectAsState()
     val scope = rememberCoroutineScope()
     var actionError by remember { mutableStateOf<String?>(null) }
@@ -90,12 +91,14 @@ private fun TickerApp(repository: ConfigRepository, viewModel: HomeViewModel) {
         pollState = pollState,
         error = actionError ?: saveError ?: configError,
         selectedGroup = selectedGroup,
+        searchState = searchState,
         onImportRequested = configImport.openImportPicker,
         onExportRequested = configImport.openExportPicker,
         onGroupSelected = viewModel::selectGroup,
         onRefresh = viewModel::refresh,
         onAddSymbol = viewModel::addSymbol,
         onRemoveSymbol = viewModel::removeSymbol,
+        onSearchQueryChanged = viewModel::onSearchQueryChanged,
         onAddLot = viewModel::addLot,
         onUpdateLot = viewModel::updateLot,
         onDeleteLot = viewModel::deleteLot,

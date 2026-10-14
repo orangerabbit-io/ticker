@@ -17,16 +17,22 @@ import io.orangerabbit.ticker.config.target
 import io.orangerabbit.ticker.config.withSymbolAdded
 import io.orangerabbit.ticker.poll.PollState
 import io.orangerabbit.ticker.poll.QuotePoller
+import io.orangerabbit.ticker.source.SymbolSearch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -38,9 +44,14 @@ import kotlinx.coroutines.withContext
 // repository. It owns the selected group index as the single source of truth shared by
 // the group tabs, the group pager, and the poller. It lives in androidMain because
 // ConfigRepository is an androidMain interface.
+
+// searchDebounceMillis is how long a typed query settles before the symbol search runs.
+private const val searchDebounceMillis = 300L
+
 class HomeViewModel(
     private val poller: QuotePoller,
     private val configRepo: ConfigRepository,
+    private val symbolSearch: SymbolSearch,
 ) {
 
     val state: StateFlow<PollState> = poller.state
@@ -57,11 +68,67 @@ class HomeViewModel(
     private val _saveError = MutableStateFlow<String?>(null)
     val saveError: StateFlow<String?> = _saveError.asStateFlow()
 
+    // searchState is the add-symbol sheet's search snapshot (see SearchState): null
+    // while idle — nothing typed or the sheet closed — otherwise the live query with
+    // the debounced search's progress and its outcome for the current query.
+    private val searchQuery = MutableStateFlow("")
+    private val _searchState = MutableStateFlow<SearchState?>(null)
+    val searchState: StateFlow<SearchState?> = _searchState.asStateFlow()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var observation: Job? = null
     private var restart: Job? = null
     private var foreground: CompletableJob? = null
     private var lastConfig: TickerConfig? = null
+
+    // The symbol search pipeline runs for the singleton's lifetime and does nothing
+    // while no query is typed: a typed query settles for 300 ms and only queries of two
+    // or more characters reach the network. flatMapLatest cancels the superseded
+    // debounce and any in-flight search the moment a newer query — or the sheet's close
+    // — arrives, and a finished search publishes its outcome only if its query is still
+    // the current one.
+    init {
+        collectSearch()
+    }
+
+    @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
+    private fun collectSearch() {
+        scope.launch {
+            searchQuery
+                .flatMapLatest { query ->
+                    flow {
+                        if (query.length >= 2) {
+                            delay(searchDebounceMillis)
+                            // the search itself runs inside the flatMapLatest span so a
+                            // newer query cancels an in-flight search too, not just the
+                            // pending debounce
+                            val outcome = symbolSearch.search(query)
+                            emit(SearchState(query = query, loading = false, outcome = outcome))
+                        }
+                    }
+                }
+                .collect { state ->
+                    // a superseded query can race its cancellation; only the query that
+                    // is still current may publish its outcome
+                    if (searchQuery.value == state.query) {
+                        _searchState.value = state
+                    }
+                }
+        }
+    }
+
+    // onSearchQueryChanged feeds the search pipeline and mirrors the typed query into
+    // searchState immediately (the sheet's field and exact-add rows read it). An empty
+    // query — including the sheet's close — returns the state to idle and cancels any
+    // pending or in-flight search.
+    fun onSearchQueryChanged(query: String) {
+        searchQuery.value = query
+        _searchState.value = if (query.isEmpty()) {
+            null
+        } else {
+            SearchState(query = query, loading = query.length >= 2, outcome = null)
+        }
+    }
 
     // start begins config observation and is idempotent, so the composition-level start
     // and the activity's ON_START can both call it. Each config change cancels the
