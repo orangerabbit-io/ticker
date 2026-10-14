@@ -214,6 +214,57 @@ class YamlConfigTest {
     }
 
     @Test
+    fun `duplicate group names rejected with a clear message`() {
+        val result = parseTickerConfig(
+            """
+            groups:
+              - name: a
+                watchlist: [NET]
+              - name: a
+                watchlist: [TEAM]
+            """.trimIndent(),
+        )
+
+        assertTrue(result.isFailure)
+        val message = assertNotNull(result.exceptionOrNull()?.message)
+        assertTrue("unique" in message, "message should name the uniqueness rule but was: $message")
+    }
+
+    @Test
+    fun `stored default group merges into the promoted entries`() {
+        // top-level entries promote to a "default" group; a stored group of that name
+        // merges with them (promoted entries first, duplicates dropped) instead of
+        // producing two groups named "default"
+        val config = parseTickerConfig(
+            """
+            watchlist:
+              - AAPL
+            lots:
+              - symbol: AAPL
+                quantity: 1
+            groups:
+              - name: default
+                watchlist:
+                  - MSFT
+                  - AAPL
+                lots:
+                  - symbol: MSFT
+                    quantity: 2
+            """.trimIndent(),
+        ).getOrThrow()
+
+        assertEquals(listOf("AAPL", "MSFT"), config.watchlist)
+        assertEquals(
+            listOf(
+                Lot(symbol = "AAPL", quantity = 1.0),
+                Lot(symbol = "MSFT", quantity = 2.0),
+            ),
+            config.lots,
+        )
+        assertEquals(emptyList(), config.groups)
+    }
+
+    @Test
     fun `unknown keys are ignored`() {
         val config = parseTickerConfig(
             """
@@ -250,5 +301,22 @@ class YamlConfigTest {
 
         val groupsOnly = TickerConfig(groups = listOf(ConfigGroup(name = "crypto")))
         assertEquals(groupsOnly, groupsOnly.withDefaultGroup())
+    }
+
+    @Test
+    fun `withDefaultGroup merges a stored default group into the promoted entries`() {
+        // same materialization as the parse path: the promoted entries keep their
+        // place first and one "default" group is shown first
+        val config = TickerConfig(
+            watchlist = listOf("AAPL"),
+            groups = listOf(ConfigGroup(name = "default", watchlist = listOf("MSFT", "AAPL"))),
+        )
+        val grouped = config.withDefaultGroup()
+
+        assertEquals(
+            listOf(ConfigGroup(name = "default", watchlist = listOf("AAPL", "MSFT"))),
+            grouped.groups,
+        )
+        assertTrue(grouped.watchlist.isEmpty())
     }
 }

@@ -55,5 +55,6 @@ class ConfigJsonTest {
     fun `semantic errors are rejected on the stored-config path too`() {
         assertTrue(parseTickerConfigJson("""{"interval":-1}""").isFailure)
         assertTrue(parseTickerConfigJson("""{"lots":[{"quantity":5.0}]}""").isFailure)
+        assertTrue(parseTickerConfigJson("""{"groups":[{"name":"a"},{"name":"a"}]}""").isFailure)
     }
 }
