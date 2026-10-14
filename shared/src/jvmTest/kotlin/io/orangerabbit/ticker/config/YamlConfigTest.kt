@@ -125,6 +125,61 @@ class YamlConfigTest {
     }
 
     @Test
+    fun `parse normalizes symbols to uppercase everywhere`() {
+        val config = parseTickerConfig(
+            """
+            watchlist:
+              - btc-usd
+            lots:
+              - symbol: abnb
+                quantity: 1
+            groups:
+              - name: default
+                watchlist:
+                  - eth-usd
+              - name: crypto
+                watchlist:
+                  - shib-usd
+                lots:
+                  - symbol: sol1-usd
+                    quantity: 2
+            """.trimIndent(),
+        ).getOrThrow()
+
+        assertEquals(listOf("BTC-USD", "ETH-USD"), config.watchlist)
+        assertEquals(listOf(Lot(symbol = "ABNB", quantity = 1.0)), config.lots)
+        assertEquals(
+            listOf(
+                ConfigGroup(
+                    name = "crypto",
+                    watchlist = listOf("SHIB-USD"),
+                    lots = listOf(Lot(symbol = "SOL1-USD", quantity = 2.0)),
+                ),
+            ),
+            config.groups,
+        )
+    }
+
+    @Test
+    fun `round trip re-exports normalized symbols`() {
+        val config = parseTickerConfig(
+            """
+            watchlist:
+              - btc-usd
+            lots:
+              - symbol: abnb
+                quantity: 1
+            """.trimIndent(),
+        ).getOrThrow()
+
+        val yaml = config.toYaml()
+        assertTrue("BTC-USD" in yaml, "expected the uppercase watchlist symbol in the export but was: $yaml")
+        assertTrue("ABNB" in yaml, "expected the uppercase lot symbol in the export but was: $yaml")
+        assertTrue("btc-usd" !in yaml, "expected no lowercase symbol in the export but was: $yaml")
+        assertEquals(config, parseTickerConfig(yaml).getOrThrow())
+    }
+
+    @Test
     fun `malformed yaml returns failure`() {
         val result = parseTickerConfig("watchlist: [unclosed")
 

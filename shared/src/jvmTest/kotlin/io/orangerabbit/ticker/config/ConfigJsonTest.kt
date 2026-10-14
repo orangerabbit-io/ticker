@@ -47,6 +47,48 @@ class ConfigJsonTest {
     }
 
     @Test
+    fun `parse normalizes symbols to uppercase everywhere`() {
+        val config = parseTickerConfigJson(
+            """
+            {
+              "watchlist": ["btc-usd"],
+              "lots": [{"symbol": "abnb", "quantity": 1.0}],
+              "groups": [
+                {"name": "default", "watchlist": ["eth-usd"]},
+                {"name": "crypto", "watchlist": ["shib-usd"], "lots": [{"symbol": "sol1-usd", "quantity": 2.0}]}
+              ]
+            }
+            """.trimIndent(),
+        ).getOrThrow()
+
+        assertEquals(listOf("BTC-USD", "ETH-USD"), config.watchlist)
+        assertEquals(listOf(Lot(symbol = "ABNB", quantity = 1.0)), config.lots)
+        assertEquals(
+            listOf(
+                ConfigGroup(
+                    name = "crypto",
+                    watchlist = listOf("SHIB-USD"),
+                    lots = listOf(Lot(symbol = "SOL1-USD", quantity = 2.0)),
+                ),
+            ),
+            config.groups,
+        )
+    }
+
+    @Test
+    fun `round trip re-exports normalized symbols`() {
+        val config = parseTickerConfigJson(
+            """{"watchlist": ["btc-usd"], "lots": [{"symbol": "abnb", "quantity": 1.0}]}""",
+        ).getOrThrow()
+
+        val json = config.toJson()
+        assertTrue("BTC-USD" in json, "expected the uppercase watchlist symbol in the export but was: $json")
+        assertTrue("ABNB" in json, "expected the uppercase lot symbol in the export but was: $json")
+        assertTrue("btc-usd" !in json, "expected no lowercase symbol in the export but was: $json")
+        assertEquals(config, parseTickerConfigJson(json).getOrThrow())
+    }
+
+    @Test
     fun `parse of empty string returns failure`() {
         assertTrue(parseTickerConfigJson("").isFailure)
     }

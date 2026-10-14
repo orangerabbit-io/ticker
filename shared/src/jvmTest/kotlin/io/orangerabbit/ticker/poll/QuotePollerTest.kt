@@ -204,6 +204,21 @@ class QuotePollerTest {
     }
 
     @Test
+    fun `a lowercase-configured symbol does not go unavailable when the quote returns uppercase`() = runTest {
+        // pre-normalization-style config: the quote's source-native symbol differs from
+        // the configured identity only in case, so the symbol must count as present
+        val yahoo = FakeYahoo(quotes = { Result.success(listOf(quote("BTC"))) })
+        val poller = QuotePoller(yahoo, FakeCoinbase(), fakeSymbols(), clock = { testScheduler.currentTime })
+
+        poller.start(TickerConfig(interval = 30, groups = listOf(ConfigGroup(name = "g", watchlist = listOf("btc")))))
+
+        assertFalse("btc" in poller.state.value.unavailable, "btc must not be reported unavailable")
+        assertTrue(poller.state.value.unavailable.isEmpty())
+
+        poller.stop()
+    }
+
+    @Test
     fun `rates are merged into the portfolio summary`() = runTest {
         val yahoo = FakeYahoo(
             quotes = { Result.success(listOf(quote("AAPL", price = 100.0, from = "USD"))) },

@@ -44,7 +44,7 @@ private val yamlFormat = Yaml(configuration = YamlConfiguration(strictMode = fal
 
 fun parseTickerConfig(yaml: String): Result<TickerConfig> =
     try {
-        validateTickerConfig(yamlFormat.decodeFromString(RawConfig.serializer(), yaml).toDomain())
+        validateTickerConfig(yamlFormat.decodeFromString(RawConfig.serializer(), yaml).toDomain().normalized())
     } catch (e: Exception) {
         Result.failure(
             if (e.message.isNullOrBlank()) IllegalStateException("failed to parse ticker configuration", e) else e,

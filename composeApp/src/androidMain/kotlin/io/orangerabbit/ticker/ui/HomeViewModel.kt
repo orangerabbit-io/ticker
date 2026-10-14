@@ -14,6 +14,7 @@ import io.orangerabbit.ticker.config.removeGroup
 import io.orangerabbit.ticker.config.renameGroup
 import io.orangerabbit.ticker.config.replaced
 import io.orangerabbit.ticker.config.target
+import io.orangerabbit.ticker.config.withSymbolAdded
 import io.orangerabbit.ticker.poll.PollState
 import io.orangerabbit.ticker.poll.QuotePoller
 import kotlinx.coroutines.CancellationException
@@ -134,7 +135,7 @@ class HomeViewModel(
         val trimmed = symbol.trim()
         if (trimmed.isEmpty()) return
         editTarget(targetAt(selectedGroupIndex())) { group ->
-            if (trimmed in group.watchlist) group else group.copy(watchlist = group.watchlist + trimmed)
+            group.copy(watchlist = group.watchlist.withSymbolAdded(symbol))
         }
     }
 
