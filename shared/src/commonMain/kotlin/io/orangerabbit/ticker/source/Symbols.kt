@@ -16,10 +16,12 @@ data class ResolvedGroup(
     val yahooSymbols: List<String>,
     val coinbaseProducts: List<String>,
     val unresolved: List<String>,
-    // maps each source-native symbol (yahoo symbol or coinbase product id) back to the
-    // configured ticker symbol so returned quotes can be re-keyed to the user's config;
-    // the first configured occurrence wins when several symbols resolve to one source symbol
-    val tickerBySourceSymbol: Map<String, String> = emptyMap(),
+    // source-qualified maps from the source-native identity (yahoo symbol, coinbase product
+    // id) back to the configured ticker symbol so returned quotes can be re-keyed to the
+    // user's config; qualification keeps a coinbase-configured ticker from ever claiming a
+    // yahoo symbol or vice versa, and the first configured occurrence wins within a source
+    val tickerByYahooSymbol: Map<String, String> = emptyMap(),
+    val tickerByCoinbaseProduct: Map<String, String> = emptyMap(),
 )
 
 // Port of the CLI's ticker-static symbol CSV parse: rows [tickerSymbol, sourceSymbol, sourceId],
@@ -55,7 +57,8 @@ fun resolveGroup(group: ConfigGroup, symbolMap: TickerSymbolMap): ResolvedGroup 
     val yahooSymbols = mutableListOf<String>()
     val coinbaseProducts = mutableListOf<String>()
     val unresolved = mutableListOf<String>()
-    val tickerBySourceSymbol = LinkedHashMap<String, String>()
+    val tickerByYahooSymbol = LinkedHashMap<String, String>()
+    val tickerByCoinbaseProduct = LinkedHashMap<String, String>()
 
     for (symbol in watchlist) {
         when {
@@ -63,7 +66,7 @@ fun resolveGroup(group: ConfigGroup, symbolMap: TickerSymbolMap): ResolvedGroup 
                 val mapped = symbolMap[symbol]
                 if (mapped != null && mapped.source == QuoteSource.COINBASE) {
                     coinbaseProducts.add(mapped.sourceSymbol)
-                    tickerBySourceSymbol.putIfAbsent(mapped.sourceSymbol, symbol)
+                    tickerByCoinbaseProduct.putIfAbsent(mapped.sourceSymbol, symbol)
                 } else {
                     unresolved.add(symbol)
                 }
@@ -71,11 +74,11 @@ fun resolveGroup(group: ConfigGroup, symbolMap: TickerSymbolMap): ResolvedGroup 
             symbol.endsWith(".CB") -> {
                 val product = symbol.removeSuffix(".CB")
                 coinbaseProducts.add(product)
-                tickerBySourceSymbol.putIfAbsent(product, symbol)
+                tickerByCoinbaseProduct.putIfAbsent(product, symbol)
             }
             else -> {
                 yahooSymbols.add(symbol)
-                tickerBySourceSymbol.putIfAbsent(symbol, symbol)
+                tickerByYahooSymbol.putIfAbsent(symbol, symbol)
             }
         }
     }
@@ -85,7 +88,8 @@ fun resolveGroup(group: ConfigGroup, symbolMap: TickerSymbolMap): ResolvedGroup 
         yahooSymbols = yahooSymbols,
         coinbaseProducts = coinbaseProducts,
         unresolved = unresolved,
-        tickerBySourceSymbol = tickerBySourceSymbol,
+        tickerByYahooSymbol = tickerByYahooSymbol,
+        tickerByCoinbaseProduct = tickerByCoinbaseProduct,
     )
 }
 

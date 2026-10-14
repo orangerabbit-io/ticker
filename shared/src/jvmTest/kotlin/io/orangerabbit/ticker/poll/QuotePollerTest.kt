@@ -20,6 +20,7 @@ import io.orangerabbit.ticker.config.TickerConfig
 import io.orangerabbit.ticker.source.SymbolsClient
 import io.orangerabbit.ticker.source.coinbase.CoinbaseQuoteSource
 import io.orangerabbit.ticker.source.yahoo.YahooQuoteSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -277,8 +278,13 @@ class QuotePollerTest {
         })
         val poller = QuotePoller(yahoo, FakeCoinbase(), fakeSymbols(), clock = { testScheduler.currentTime })
 
+        var startCancelled = false
         val starter = launch {
-            poller.start(TickerConfig(interval = 30, groups = listOf(ConfigGroup(name = "g", watchlist = listOf("AAPL")))))
+            try {
+                poller.start(TickerConfig(interval = 30, groups = listOf(ConfigGroup(name = "g", watchlist = listOf("AAPL")))))
+            } catch (e: CancellationException) {
+                startCancelled = true
+            }
         }
         started.await()
         assertEquals(listOf(listOf("AAPL")), yahoo.quoteCalls)
@@ -289,6 +295,7 @@ class QuotePollerTest {
         gate.complete(Unit)
         starter.join()
 
+        assertTrue(startCancelled)
         assertFalse(poller.state.value.isLoading)
         assertTrue(poller.state.value.assets.isEmpty())
 
@@ -314,7 +321,14 @@ class QuotePollerTest {
         val groupsA = listOf(ConfigGroup(name = "a", watchlist = listOf("AAPL")))
         val groupsB = listOf(ConfigGroup(name = "b", watchlist = listOf("MSFT")))
 
-        val starter1 = launch { poller.start(TickerConfig(interval = 30, groups = groupsA)) }
+        var start1Cancelled = false
+        val starter1 = launch {
+            try {
+                poller.start(TickerConfig(interval = 30, groups = groupsA))
+            } catch (e: CancellationException) {
+                start1Cancelled = true
+            }
+        }
         started.await()
         val starter2 = launch { poller.start(TickerConfig(interval = 30, groups = groupsB)) }
         runCurrent()
@@ -322,6 +336,7 @@ class QuotePollerTest {
         starter1.join()
         starter2.join()
 
+        assertTrue(start1Cancelled)
         assertEquals(listOf(listOf("AAPL"), listOf("MSFT")), yahoo.quoteCalls)
 
         advanceTimeBy(30_000)
@@ -399,6 +414,85 @@ class QuotePollerTest {
         assertEquals(100.0, asset.position.cost)
         assertEquals(200.0, asset.position.value)
         assertEquals(200.0, poller.state.value.summary!!.value)
+        assertTrue(poller.state.value.unavailable.isEmpty())
+
+        poller.stop()
+    }
+
+    @Test
+    fun `cancelling the caller of start cleans up the startup work`() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val yahoo = FakeYahoo(quotes = { symbols ->
+            started.complete(Unit)
+            gate.await()
+            Result.success(symbols.map { quote(it) })
+        })
+        val poller = QuotePoller(yahoo, FakeCoinbase(), fakeSymbols(), clock = { testScheduler.currentTime })
+
+        val starter = launch {
+            poller.start(TickerConfig(interval = 30, groups = listOf(ConfigGroup(name = "g", watchlist = listOf("AAPL")))))
+        }
+        started.await()
+        assertTrue(poller.state.value.isLoading)
+
+        starter.cancel()
+        starter.join()
+        runCurrent()
+
+        assertFalse(poller.state.value.isLoading)
+        assertTrue(poller.state.value.assets.isEmpty())
+
+        gate.complete(Unit)
+        advanceTimeBy(120_000)
+        runCurrent()
+
+        assertTrue(poller.state.value.assets.isEmpty())
+        assertEquals(1, yahoo.quoteCalls.size)
+    }
+
+    @Test
+    fun `same-named yahoo and coinbase symbols keep their own configured identities`() = runTest {
+        val yahoo = FakeYahoo(quotes = { Result.success(listOf(quote("BTC-USD", price = 100.0, from = "USD"))) })
+        val coinbase = FakeCoinbase(quotes = {
+            Result.success(
+                listOf(
+                    quote(
+                        symbol = "BTC.CB",
+                        price = 7.0,
+                        from = "USD",
+                        symbolInSourceApi = "BTC-USD",
+                        source = QuoteSource.COINBASE,
+                        assetClass = AssetClass.CRYPTOCURRENCY,
+                    ),
+                ),
+            )
+        })
+        val poller = QuotePoller(yahoo, coinbase, fakeSymbols(), clock = { testScheduler.currentTime })
+
+        poller.start(
+            TickerConfig(
+                interval = 30,
+                groups = listOf(
+                    ConfigGroup(
+                        name = "g",
+                        watchlist = listOf("BTC-USD.CB", "BTC-USD"),
+                        lots = listOf(
+                            Lot(symbol = "BTC-USD.CB", quantity = 1.0, unitCost = 10.0),
+                            Lot(symbol = "BTC-USD", quantity = 2.0, unitCost = 20.0),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val assets = poller.state.value.assets.associateBy { it.symbol }
+        assertEquals(setOf("BTC-USD.CB", "BTC-USD"), assets.keys)
+        assertEquals(1.0, assets["BTC-USD.CB"]?.position?.quantity)
+        assertEquals(7.0, assets["BTC-USD.CB"]?.position?.value)
+        assertEquals(2.0, assets["BTC-USD"]?.position?.quantity)
+        assertEquals(200.0, assets["BTC-USD"]?.position?.value)
+        assertEquals(207.0, poller.state.value.summary!!.value)
         assertTrue(poller.state.value.unavailable.isEmpty())
 
         poller.stop()

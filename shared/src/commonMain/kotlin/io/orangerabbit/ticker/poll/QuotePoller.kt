@@ -15,6 +15,7 @@ import io.orangerabbit.ticker.source.TickerSymbolMap
 import io.orangerabbit.ticker.source.coinbase.CoinbaseQuoteSource
 import io.orangerabbit.ticker.source.resolveGroup
 import io.orangerabbit.ticker.source.yahoo.YahooQuoteSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -70,6 +71,8 @@ class QuotePoller(
     // of 30 seconds. Lifecycle ownership is registered before the first suspension: stop()
     // or a later start() cancels the registered job — including in-flight startup work —
     // and a superseded startup cannot install a loop because its scope is already cancelled.
+    // Cancellation propagates both ways: startup cancelled by stop()/a later start() surfaces
+    // as a cancelled start() result, and a cancelled caller cleans up the startup work.
     suspend fun start(config: TickerConfig, groupIndex: Int = 0) {
         stop()
         val cfg = config.withDefaultGroup()
@@ -79,17 +82,32 @@ class QuotePoller(
         loopJob = job
         val scope = CoroutineScope(currentCoroutineContext() + job)
 
-        scope.launch {
+        val startup = scope.launch {
             symbolMap = symbols.fetchSymbolMap()
             refreshMutex.withLock { switchGroup(cfg, groupIndex) }
             refresh()
-        }.join()
+        }
+
+        try {
+            startup.join()
+        } catch (e: CancellationException) {
+            // this caller was cancelled while starting up: clean up the in-flight startup
+            // work so it cannot publish state afterward
+            job.cancel()
+            throw e
+        }
 
         scope.launch {
             while (true) {
                 delay(max(cfg.interval, 30) * 1000L)
                 refresh()
             }
+        }
+
+        if (!job.isActive) {
+            // stop() or a superseding start() cancelled this startup as it completed:
+            // report the cancelled result to the caller instead of a successful start
+            throw CancellationException("quote poller startup was cancelled")
         }
     }
 
@@ -141,14 +159,15 @@ class QuotePoller(
 
                 if (resolved.yahooSymbols.isNotEmpty()) {
                     yahoo.getQuotes(resolved.yahooSymbols).fold(
-                        onSuccess = { yahooQuotes = it.withTickerIdentities(resolved) { quote -> quote.symbol } },
+                        onSuccess = { yahooQuotes = it.withTickerIdentities(resolved.tickerByYahooSymbol) { quote -> quote.symbol } },
                         onFailure = { errors.add(yahooError) },
                     )
                 }
                 if (resolved.coinbaseProducts.isNotEmpty()) {
                     coinbase.getQuotes(resolved.coinbaseProducts).fold(
                         onSuccess = {
-                            coinbaseQuotes = it.withTickerIdentities(resolved) { quote -> quote.meta.symbolInSourceApi }
+                            coinbaseQuotes =
+                                it.withTickerIdentities(resolved.tickerByCoinbaseProduct) { quote -> quote.meta.symbolInSourceApi }
                         },
                         onFailure = { errors.add(coinbaseError) },
                     )
@@ -179,14 +198,15 @@ class QuotePoller(
         }
     }
 
-    // withTickerIdentities restores the configured ticker symbol on each returned quote so
-    // aggregation lookups (lots, order index) match the user's config, keeping
-    // meta.symbolInSourceApi as the source API identity (e.g. the Coinbase product id).
+    // withTickerIdentities restores the configured ticker symbol on each returned quote via
+    // its source-qualified identity map so aggregation lookups (lots, order index) match the
+    // user's config, keeping meta.symbolInSourceApi as the source API identity (e.g. the
+    // Coinbase product id). A quote can only ever be re-keyed by its own source's map.
     private fun List<AssetQuote>.withTickerIdentities(
-        resolved: ResolvedGroup,
+        tickerBySource: Map<String, String>,
         sourceKey: (AssetQuote) -> String,
     ): List<AssetQuote> = map { quote ->
-        val ticker = resolved.tickerBySourceSymbol[sourceKey(quote)] ?: quote.symbol
+        val ticker = tickerBySource[sourceKey(quote)] ?: quote.symbol
         if (ticker == quote.symbol) quote else quote.copy(symbol = ticker)
     }
 
