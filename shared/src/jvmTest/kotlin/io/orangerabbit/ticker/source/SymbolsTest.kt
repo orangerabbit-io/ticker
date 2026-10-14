@@ -83,6 +83,23 @@ class SymbolsTest {
     }
 
     @Test
+    fun `retains every configured identity that resolves to one product`() {
+        // ACH.X maps to ACH-USD and the ACH-USD.CB lot strips to the same product:
+        // both configured identities must survive reconciliation against one quote
+        val resolved = resolveGroup(
+            ConfigGroup(
+                name = "g",
+                watchlist = listOf("ACH.X"),
+                lots = listOf(Lot(symbol = "ACH-USD.CB", quantity = 1.0)),
+            ),
+            symbolMap(),
+        )
+
+        assertEquals(listOf("ACH-USD"), resolved.coinbaseProducts)
+        assertEquals(mapOf("ACH-USD" to listOf("ACH.X", "ACH-USD.CB")), resolved.tickerByCoinbaseProduct)
+    }
+
+    @Test
     fun `routes X suffix with unknown source or missing key to unresolved`() {
         // ach.X pins exact case-sensitive map lookup: the map key is ACH.X and must not match.
         val resolved = resolveGroup(

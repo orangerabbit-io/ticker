@@ -198,16 +198,23 @@ class QuotePoller(
         }
     }
 
-    // withTickerIdentities restores the configured ticker symbol on each returned quote via
-    // its source-qualified identity map so aggregation lookups (lots, order index) match the
-    // user's config, keeping meta.symbolInSourceApi as the source API identity (e.g. the
-    // Coinbase product id). A quote can only ever be re-keyed by its own source's map.
+    // withTickerIdentities restores the configured ticker symbols on each returned quote
+    // via its source-qualified identity map so aggregation lookups (lots, order index)
+    // match the user's config, keeping meta.symbolInSourceApi as the source API identity
+    // (e.g. the Coinbase product id). A product that resolves to several configured
+    // identities is reconciled to each of them — one quote copy per identity — so no
+    // configured lot or watchlist entry is dropped. A quote can only ever be re-keyed by
+    // its own source's map.
     private fun List<AssetQuote>.withTickerIdentities(
-        tickerBySource: Map<String, String>,
+        tickerBySource: Map<String, List<String>>,
         sourceKey: (AssetQuote) -> String,
-    ): List<AssetQuote> = map { quote ->
-        val ticker = tickerBySource[sourceKey(quote)] ?: quote.symbol
-        if (ticker == quote.symbol) quote else quote.copy(symbol = ticker)
+    ): List<AssetQuote> = flatMap { quote ->
+        val tickers = tickerBySource[sourceKey(quote)].orEmpty()
+        if (tickers.isEmpty()) {
+            listOf(quote)
+        } else {
+            tickers.map { ticker -> if (ticker == quote.symbol) quote else quote.copy(symbol = ticker) }
+        }
     }
 
     private suspend fun fetchRates(cfg: TickerConfig, quotes: List<AssetQuote>): CurrencyRates {
@@ -219,15 +226,16 @@ class QuotePoller(
         return yahoo.getCurrencyRates(fromCurrencies, cfg.currency ?: "USD").getOrElse { CurrencyRates(emptyMap()) }
     }
 
-    // missingSymbols lists expected symbols that got no quote in this refresh: yahoo
-    // symbols matched by exact symbol, coinbase products matched by the product id carried
-    // in meta.symbolInSourceApi, plus symbols that could not be resolved to a source at all.
+    // missingSymbols lists expected identities that got no quote in this refresh: every
+    // configured ticker identity of an unanswered yahoo symbol or coinbase product (an
+    // identity counts as present only when its source-native symbol returned a quote),
+    // plus symbols that could not be resolved to a source at all.
     private fun missingSymbols(resolved: ResolvedGroup): List<String> {
         val presentYahoo = yahooQuotes.mapTo(HashSet()) { it.symbol }
         val presentCoinbase = coinbaseQuotes.mapTo(HashSet()) { it.meta.symbolInSourceApi }
 
-        return resolved.yahooSymbols.filter { it !in presentYahoo } +
-            resolved.coinbaseProducts.filter { it !in presentCoinbase } +
+        return resolved.tickerByYahooSymbol.filterKeys { it !in presentYahoo }.values.flatten() +
+            resolved.tickerByCoinbaseProduct.filterKeys { it !in presentCoinbase }.values.flatten() +
             resolved.unresolved
     }
 

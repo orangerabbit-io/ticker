@@ -17,11 +17,12 @@ data class ResolvedGroup(
     val coinbaseProducts: List<String>,
     val unresolved: List<String>,
     // source-qualified maps from the source-native identity (yahoo symbol, coinbase product
-    // id) back to the configured ticker symbol so returned quotes can be re-keyed to the
-    // user's config; qualification keeps a coinbase-configured ticker from ever claiming a
-    // yahoo symbol or vice versa, and the first configured occurrence wins within a source
-    val tickerByYahooSymbol: Map<String, String> = emptyMap(),
-    val tickerByCoinbaseProduct: Map<String, String> = emptyMap(),
+    // id) back to EVERY configured ticker symbol so returned quotes can be re-keyed to all
+    // of the user's config entries (a group may watch SOL.X and hold a SOL-USD.CB lot that
+    // both resolve to one product); qualification keeps a coinbase-configured ticker from
+    // ever claiming a yahoo symbol or vice versa, and identities keep config order
+    val tickerByYahooSymbol: Map<String, List<String>> = emptyMap(),
+    val tickerByCoinbaseProduct: Map<String, List<String>> = emptyMap(),
 )
 
 // Port of the CLI's ticker-static symbol CSV parse: rows [tickerSymbol, sourceSymbol, sourceId],
@@ -54,39 +55,40 @@ fun parseSymbolsCsv(body: String): TickerSymbolMap {
 // duplicates (CLI getAssetGroups: watchlist loop first, then the lots loop appends).
 fun resolveGroup(group: ConfigGroup, symbolMap: TickerSymbolMap): ResolvedGroup {
     val watchlist = implicitWatchlist(group)
-    val yahooSymbols = mutableListOf<String>()
-    val coinbaseProducts = mutableListOf<String>()
     val unresolved = mutableListOf<String>()
-    val tickerByYahooSymbol = LinkedHashMap<String, String>()
-    val tickerByCoinbaseProduct = LinkedHashMap<String, String>()
+    val tickerByYahooSymbol = LinkedHashMap<String, List<String>>()
+    val tickerByCoinbaseProduct = LinkedHashMap<String, List<String>>()
+
+    // addIdentity retains every configured ticker symbol per source-native identity in
+    // config order so one product quote can be reconciled to each of them
+    fun addIdentity(map: LinkedHashMap<String, List<String>>, native: String, ticker: String) {
+        val tickers = map[native]
+        map[native] = when {
+            tickers == null -> listOf(ticker)
+            ticker in tickers -> tickers
+            else -> tickers + ticker
+        }
+    }
 
     for (symbol in watchlist) {
         when {
             symbol.endsWith(".X") -> {
                 val mapped = symbolMap[symbol]
                 if (mapped != null && mapped.source == QuoteSource.COINBASE) {
-                    coinbaseProducts.add(mapped.sourceSymbol)
-                    tickerByCoinbaseProduct.putIfAbsent(mapped.sourceSymbol, symbol)
+                    addIdentity(tickerByCoinbaseProduct, mapped.sourceSymbol, symbol)
                 } else {
                     unresolved.add(symbol)
                 }
             }
-            symbol.endsWith(".CB") -> {
-                val product = symbol.removeSuffix(".CB")
-                coinbaseProducts.add(product)
-                tickerByCoinbaseProduct.putIfAbsent(product, symbol)
-            }
-            else -> {
-                yahooSymbols.add(symbol)
-                tickerByYahooSymbol.putIfAbsent(symbol, symbol)
-            }
+            symbol.endsWith(".CB") -> addIdentity(tickerByCoinbaseProduct, symbol.removeSuffix(".CB"), symbol)
+            else -> addIdentity(tickerByYahooSymbol, symbol, symbol)
         }
     }
 
     return ResolvedGroup(
         group = group.copy(watchlist = watchlist),
-        yahooSymbols = yahooSymbols,
-        coinbaseProducts = coinbaseProducts,
+        yahooSymbols = tickerByYahooSymbol.keys.toList(),
+        coinbaseProducts = tickerByCoinbaseProduct.keys.toList(),
         unresolved = unresolved,
         tickerByYahooSymbol = tickerByYahooSymbol,
         tickerByCoinbaseProduct = tickerByCoinbaseProduct,

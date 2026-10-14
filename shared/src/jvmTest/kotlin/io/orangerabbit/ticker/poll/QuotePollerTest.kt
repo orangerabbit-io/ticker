@@ -420,6 +420,73 @@ class QuotePollerTest {
     }
 
     @Test
+    fun `every configured identity of one product keeps its own lots and row`() = runTest {
+        val coinbase = FakeCoinbase(quotes = {
+            Result.success(
+                listOf(
+                    quote(
+                        symbol = "SOL.CB",
+                        price = 100.0,
+                        from = "USD",
+                        symbolInSourceApi = "SOL-USD",
+                        source = QuoteSource.COINBASE,
+                        assetClass = AssetClass.CRYPTOCURRENCY,
+                    ),
+                ),
+            )
+        })
+        val poller = QuotePoller(FakeYahoo(), coinbase, fakeSymbols("SOL.X,SOL-USD,cb\n"), clock = { testScheduler.currentTime })
+
+        poller.start(
+            TickerConfig(
+                interval = 30,
+                groups = listOf(
+                    ConfigGroup(
+                        name = "g",
+                        watchlist = listOf("SOL.X"),
+                        lots = listOf(Lot(symbol = "SOL-USD.CB", quantity = 2.0, unitCost = 50.0)),
+                    ),
+                ),
+            ),
+        )
+
+        // one product is fetched once but reconciled to every configured identity
+        assertEquals(listOf(listOf("SOL-USD")), coinbase.quoteCalls)
+        val assets = poller.state.value.assets.associateBy { it.symbol }
+        assertEquals(setOf("SOL.X", "SOL-USD.CB"), assets.keys)
+        assertEquals(0.0, assets["SOL.X"]?.position?.quantity)
+        assertEquals(2.0, assets["SOL-USD.CB"]?.position?.quantity)
+        assertEquals(100.0, assets["SOL-USD.CB"]?.position?.cost)
+        assertEquals(200.0, assets["SOL-USD.CB"]?.position?.value)
+        assertEquals(200.0, poller.state.value.summary!!.value)
+        assertTrue(poller.state.value.unavailable.isEmpty())
+
+        poller.stop()
+    }
+
+    @Test
+    fun `a product without a quote reports each configured identity unavailable`() = runTest {
+        val poller = QuotePoller(FakeYahoo(), FakeCoinbase(), fakeSymbols("SOL.X,SOL-USD,cb\n"), clock = { testScheduler.currentTime })
+
+        poller.start(
+            TickerConfig(
+                interval = 30,
+                groups = listOf(
+                    ConfigGroup(
+                        name = "g",
+                        watchlist = listOf("SOL.X"),
+                        lots = listOf(Lot(symbol = "SOL-USD.CB", quantity = 2.0)),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(listOf("SOL.X", "SOL-USD.CB"), poller.state.value.unavailable)
+
+        poller.stop()
+    }
+
+    @Test
     fun `cancelling the caller of start cleans up the startup work`() = runTest {
         val started = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<Unit>()
