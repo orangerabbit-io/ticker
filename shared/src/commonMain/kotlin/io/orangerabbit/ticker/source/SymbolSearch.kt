@@ -55,9 +55,19 @@ class SymbolSearch(
             .filter { it.source == QuoteSource.COINBASE }
             .map { ProductCatalogEntry(productId = it.sourceSymbol, baseName = "", baseDisplaySymbol = "") }
 
+        // an entry matches the raw query substring against the product id or display
+        // name, and additionally the alphanumeric-stripped forms so a compacted query
+        // ("btcusd") also hits hyphenated product ids ("BTC-USD")
+        val compactQuery = query.filter { it.isLetterOrDigit() }
         for (entry in entries) {
             val matched = entry.productId.contains(query, ignoreCase = true) ||
-                entry.baseName.contains(query, ignoreCase = true)
+                entry.baseName.contains(query, ignoreCase = true) ||
+                (compactQuery.isNotEmpty() && (
+                    entry.productId.filter { it.isLetterOrDigit() }
+                        .contains(compactQuery, ignoreCase = true) ||
+                        entry.baseName.filter { it.isLetterOrDigit() }
+                            .contains(compactQuery, ignoreCase = true)
+                    ))
             if (!matched) continue
             offer(
                 SymbolSearchResult(

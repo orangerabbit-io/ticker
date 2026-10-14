@@ -229,6 +229,20 @@ class SymbolSearchTest {
     }
 
     @Test
+    fun `compact query matches hyphenated coinbase product ids`() = runTest {
+        val outcome = search(
+            query = "btcusd",
+            catalog = catalogBody(product("BTC-USD", "Bitcoin", "BTC")),
+            csv = "BTC.X,BTC-USD,cb\n",
+        )
+
+        assertEquals(
+            listOf(SymbolSearchResult("BTC.X", "Bitcoin", "Coinbase", SearchResultSource.COINBASE)),
+            outcome.results,
+        )
+    }
+
+    @Test
     fun `query with no matches returns empty results`() = runTest {
         val outcome = search(
             query = "zzz",
