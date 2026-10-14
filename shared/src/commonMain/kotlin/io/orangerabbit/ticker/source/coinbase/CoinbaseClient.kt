@@ -63,8 +63,10 @@ class CoinbaseClient(
                 }
             }
             products += page.products
-            val pagination = page.pagination
-            if (pagination == null || !pagination.hasNext) {
+            // has_next alone does not advance pagination: an empty or repeated cursor
+            // would refetch the same page forever, so it terminates the loop too
+            val pagination = page.pagination ?: break
+            if (!pagination.hasNext || pagination.nextCursor.isEmpty() || pagination.nextCursor == cursor) {
                 break
             }
             cursor = pagination.nextCursor

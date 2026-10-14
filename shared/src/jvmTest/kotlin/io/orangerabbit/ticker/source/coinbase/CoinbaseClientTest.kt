@@ -209,4 +209,48 @@ class CoinbaseClientTest {
 
         assertEquals(2, requests)
     }
+
+    @Test
+    fun `listProducts terminates when has_next is true with an empty cursor`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val body = """{"products":[{"product_id":"BTC-USD","base_name":"Bitcoin","base_display_symbol":"BTC","product_type":"SPOT","status":"online"}],"pagination":{"next_cursor":"","has_next":true}}"""
+        val http = HttpClient(MockEngine { request ->
+            recorded += request
+            check(recorded.size <= 2) { "pagination did not terminate" }
+            respond(body, HttpStatusCode.OK)
+        })
+        val client = CoinbaseClient(http)
+
+        val entries = client.listProducts().getOrThrow()
+
+        assertEquals(listOf(ProductCatalogEntry("BTC-USD", "Bitcoin", "BTC")), entries)
+        assertEquals(1, recorded.size)
+    }
+
+    @Test
+    fun `listProducts terminates when a page repeats the previous cursor`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val repeated = """{"products":[{"product_id":"SOL-USD","base_name":"Solana","base_display_symbol":"SOL","product_type":"SPOT","status":"online"}],"pagination":{"next_cursor":"c2Vjb25k","has_next":true}}"""
+        val http = HttpClient(MockEngine { request ->
+            recorded += request
+            check(recorded.size <= 3) { "pagination did not terminate" }
+            if (request.url.parameters["cursor"] == "c2Vjb25k") {
+                respond(repeated, HttpStatusCode.OK)
+            } else {
+                respond(fixture("catalog-page-1.json"), HttpStatusCode.OK)
+            }
+        })
+        val client = CoinbaseClient(http)
+
+        val entries = client.listProducts().getOrThrow()
+
+        assertEquals(
+            listOf(
+                ProductCatalogEntry("BTC-USD", "Bitcoin", "BTC"),
+                ProductCatalogEntry("SOL-USD", "Solana", "SOL"),
+            ),
+            entries,
+        )
+        assertEquals(2, recorded.size)
+    }
 }
