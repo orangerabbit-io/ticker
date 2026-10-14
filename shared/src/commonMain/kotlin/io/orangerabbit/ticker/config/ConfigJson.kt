@@ -44,7 +44,7 @@ private val jsonFormat = Json { ignoreUnknownKeys = true }
 
 fun parseTickerConfigJson(json: String): Result<TickerConfig> =
     try {
-        Result.success(jsonFormat.decodeFromString(JsonConfig.serializer(), json).toDomain())
+        validateTickerConfig(jsonFormat.decodeFromString(JsonConfig.serializer(), json).toDomain())
     } catch (e: Exception) {
         Result.failure(
             if (e.message.isNullOrBlank()) IllegalStateException("failed to parse ticker configuration json", e) else e,

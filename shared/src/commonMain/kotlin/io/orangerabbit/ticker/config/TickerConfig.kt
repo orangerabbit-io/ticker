@@ -39,3 +39,31 @@ fun TickerConfig.withDefaultGroup(): TickerConfig =
             groups = listOf(ConfigGroup(name = "default", watchlist = watchlist, lots = lots)) + groups,
         )
     }
+
+// validateTickerConfig rejects semantically invalid configurations after decoding:
+// negative intervals and malformed lots (blank symbol, non-finite values). Negative
+// quantities are valid (shorts/netting) and missing fields keep their documented
+// defaults. Success is reported as the validated config so callers can chain.
+fun validateTickerConfig(config: TickerConfig): Result<TickerConfig> {
+    if (config.interval < 0) {
+        return Result.failure(IllegalArgumentException("interval must not be negative"))
+    }
+    validateLots("lot", config.lots)?.let { return Result.failure(it) }
+    config.groups.forEachIndexed { index, group ->
+        validateLots("group ${index + 1} lot", group.lots)?.let { return Result.failure(it) }
+    }
+    return Result.success(config)
+}
+
+private fun validateLots(label: String, lots: List<Lot>): IllegalArgumentException? {
+    lots.forEachIndexed { index, lot ->
+        val at = "$label ${index + 1}"
+        if (lot.symbol.isBlank()) {
+            return IllegalArgumentException("$at: symbol must not be blank")
+        }
+        if (!lot.quantity.isFinite() || !lot.unitCost.isFinite() || !lot.fixedCost.isFinite()) {
+            return IllegalArgumentException("$at: quantity, unit cost, and fixed cost must be finite numbers")
+        }
+    }
+    return null
+}

@@ -2,6 +2,7 @@ package io.orangerabbit.ticker.config
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -143,6 +144,73 @@ class YamlConfigTest {
         ).getOrThrow()
 
         assertEquals(-5.0, config.lots.single().quantity)
+    }
+
+    @Test
+    fun `negative interval rejected with a clear message`() {
+        val result = parseTickerConfig("interval: -1\n")
+
+        assertTrue(result.isFailure)
+        val message = assertNotNull(result.exceptionOrNull()?.message)
+        assertTrue("interval" in message, "message should name the interval but was: $message")
+    }
+
+    @Test
+    fun `lot without a symbol rejected with a clear message`() {
+        val result = parseTickerConfig(
+            """
+            lots:
+              - quantity: 5
+            """.trimIndent(),
+        )
+
+        assertTrue(result.isFailure)
+        val message = assertNotNull(result.exceptionOrNull()?.message)
+        assertTrue("symbol" in message, "message should name the symbol but was: $message")
+    }
+
+    @Test
+    fun `blank lot symbol rejected`() {
+        val result = parseTickerConfig(
+            """
+            lots:
+              - symbol: ""
+                quantity: 5
+            """.trimIndent(),
+        )
+
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun `group lot with blank symbol rejected`() {
+        val result = parseTickerConfig(
+            """
+            groups:
+              - name: crypto
+                lots:
+                  - symbol: "   "
+                    quantity: 5
+            """.trimIndent(),
+        )
+
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun `non-finite lot values rejected`() {
+        // overflowed numeric literals land as non-finite doubles and non-finite YAML
+        // scalars decode to them; neither may become a lot
+        assertTrue(parseTickerConfig("lots:\n  - symbol: ABNB\n    quantity: 1e309\n").isFailure)
+        assertTrue(parseTickerConfig("lots:\n  - symbol: ABNB\n    unit_cost: .inf\n").isFailure)
+        assertTrue(parseTickerConfig("lots:\n  - symbol: ABNB\n    fixed_cost: .nan\n").isFailure)
+    }
+
+    @Test
+    fun `zero interval accepted`() {
+        val config = parseTickerConfig("interval: 0\n").getOrThrow()
+
+        assertEquals(0, config.interval)
     }
 
     @Test
