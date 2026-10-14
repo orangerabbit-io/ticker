@@ -60,12 +60,15 @@ jobs:
         if: steps.semrel.outputs.new_release_published == 'true'
         run: |
           VER="${{ steps.semrel.outputs.new_release_version }}"
+          # new_release_tag is sometimes empty from the action; the tag is always v<version>
+          TAG="${{ steps.semrel.outputs.new_release_tag }}"
+          TAG="${TAG:-v${VER}}"
           APK_NAME="ticker-v${VER}.apk"
           # AGP 9.1.1: assembleRelease writes the APK to outputs/apk/release/<module>-release.apk
           # (module-scoped name). The intermediates redirect.txt is only the IDE pointer.
           cp composeApp/build/outputs/apk/release/composeApp-release.apk "${APK_NAME}"
           gh release upload \
-            "${{ steps.semrel.outputs.new_release_tag }}" \
+            "${TAG}" \
             "${APK_NAME}" \
             --clobber \
             --repo "${{ github.repository }}"
