@@ -116,20 +116,24 @@ class HomeViewModel(
         scope.launch(owner) { block() }
     }
 
-    // addSymbol adds to the SELECTED group: a promoted top-level default group writes
-    // back to the top-level watchlist, a named group to its own entry.
+    // addSymbol adds to the group selected when the user acts: a promoted top-level
+    // default group writes back to the top-level watchlist, a named group to its own
+    // entry. The target group is captured at action time — before the mutation joins
+    // the queue — while its contents are read fresh when the mutation runs.
     fun addSymbol(symbol: String) {
         val trimmed = symbol.trim()
         if (trimmed.isEmpty()) return
-        editSelectedGroup { group ->
+        editGroup(targetAt(selectedGroupIndex())) { group ->
             if (trimmed in group.watchlist) group else group.copy(watchlist = group.watchlist + trimmed)
         }
     }
 
-    // removeSymbol removes a watchlist entry of the selected group (a lot-owned symbol
+    // removeSymbol removes a watchlist entry of the acted-on group (a lot-owned symbol
     // stays visible through the implicit watchlist until its lots are edited away).
     fun removeSymbol(symbol: String) {
-        editSelectedGroup { group -> group.copy(watchlist = group.watchlist.filterNot { it == symbol }) }
+        editGroup(targetAt(selectedGroupIndex())) { group ->
+            group.copy(watchlist = group.watchlist.filterNot { it == symbol })
+        }
     }
 
     // updateSettings applies the settings sheet's interval, sort mode, and display
@@ -152,49 +156,79 @@ class HomeViewModel(
     fun addGroup(name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
-        editGroups { groups -> groups + ConfigGroup(name = trimmed) }
+        mutate { config ->
+            val displayed = config.withDefaultGroup().groups
+            // group names stay unique so a name identifies one group across queued
+            // actions; a duplicate name is rejected
+            if (displayed.any { it.name == trimmed }) {
+                config
+            } else {
+                config.copy(watchlist = emptyList(), lots = emptyList(), groups = displayed + ConfigGroup(name = trimmed))
+            }
+        }
     }
 
     fun renameGroup(index: Int, name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
-        editGroups { groups ->
-            if (index in groups.indices) {
-                groups.mapIndexed { i, group -> if (i == index) group.copy(name = trimmed) else group }
-            } else {
-                groups
-            }
-        }
+        val target = targetAt(index)
+        mutate { config -> renameGroupAt(config, target, trimmed) }
     }
 
     fun removeGroup(index: Int) {
-        editGroups { groups -> groups.filterIndexed { i, _ -> i != index } }
-    }
-
-    // addLot always appends to the selected group: a symbol can carry several cost-basis
-    // lots.
-    fun addLot(lot: Lot) {
-        editSelectedGroup { group -> group.copy(lots = group.lots + lot) }
-    }
-
-    // updateLot replaces only the lot at the given index in the selected group.
-    fun updateLot(index: Int, lot: Lot) {
-        editSelectedGroup { group ->
-            if (index in group.lots.indices) {
-                group.copy(lots = group.lots.mapIndexed { i, current -> if (i == index) lot else current })
+        val target = targetAt(index)
+        mutate { config ->
+            if (target.promotedDefault) {
+                // removing the promoted default group drops its top-level entries
+                if (config.watchlist.isEmpty() && config.lots.isEmpty()) {
+                    config
+                } else {
+                    config.copy(watchlist = emptyList(), lots = emptyList())
+                }
             } else {
-                group
+                val stored = config.groups.indexOfFirst { it.name == target.name }
+                if (stored < 0) {
+                    config
+                } else {
+                    config.copy(groups = config.groups.filterIndexed { i, _ -> i != stored })
+                }
             }
         }
     }
 
-    // deleteLot removes only the lot at the given index in the selected group.
-    fun deleteLot(index: Int) {
-        editSelectedGroup { group ->
-            if (index in group.lots.indices) {
-                group.copy(lots = group.lots.filterIndexed { i, _ -> i != index })
-            } else {
+    // addLot always appends to the acted-on group: a symbol can carry several cost-basis
+    // lots.
+    fun addLot(lot: Lot) {
+        editGroup(targetAt(selectedGroupIndex())) { group -> group.copy(lots = group.lots + lot) }
+    }
+
+    // updateLot replaces the lot the user selected: its content is captured at action
+    // time and re-found when the queued mutation runs, so a queued change to the same
+    // lot list cannot shift the edit onto a different lot.
+    fun updateLot(index: Int, lot: Lot) {
+        val target = targetAt(selectedGroupIndex())
+        val previous = lotAt(target, index) ?: return
+        editGroup(target) { group ->
+            val at = locateLot(group.lots, index, previous)
+            if (at < 0) {
                 group
+            } else {
+                group.copy(lots = group.lots.mapIndexed { i, current -> if (i == at) lot else current })
+            }
+        }
+    }
+
+    // deleteLot removes the lot the user selected, located by its captured content
+    // rather than by its (possibly shifted) index.
+    fun deleteLot(index: Int) {
+        val target = targetAt(selectedGroupIndex())
+        val previous = lotAt(target, index) ?: return
+        editGroup(target) { group ->
+            val at = locateLot(group.lots, index, previous)
+            if (at < 0) {
+                group
+            } else {
+                group.copy(lots = group.lots.filterIndexed { i, _ -> i != at })
             }
         }
     }
@@ -219,51 +253,109 @@ class HomeViewModel(
         }
     }
 
-    // editSelectedGroup applies edits to the group shown at the selected tab: the
-    // promoted top-level default group (written back to the top-level watchlist/lots)
-    // when it is selected, the matching stored group otherwise, or a new top-level
-    // default when the config has no groups at all. Lot and symbol indices align with
-    // the sheets' view because the promotion preserves order.
-    private fun editSelectedGroup(edit: (ConfigGroup) -> ConfigGroup) {
+    // GroupTarget identifies a group across queued mutations: the promoted top-level
+    // default group structurally (it has no stored name), stored groups by name. Group
+    // names are kept unique so a name identifies exactly one group; a target that no
+    // longer exists when its mutation runs makes the action a no-op, never a redirect
+    // onto whichever group shifted into its place.
+    private data class GroupTarget(val name: String, val promotedDefault: Boolean)
+
+    // targetAt captures the identity of the group shown at a displayed index at action
+    // time — before the mutation joins the queue — so a later config change (which
+    // resets the selection) cannot retarget a queued action.
+    private fun targetAt(index: Int): GroupTarget {
+        val config = configRepo.config.value ?: return GroupTarget(defaultGroupName, promotedDefault = true)
+        val displayed = config.withDefaultGroup().groups
+        if (displayed.isEmpty()) {
+            // an empty config's first edit creates the default group
+            return GroupTarget(defaultGroupName, promotedDefault = true)
+        }
+        val selected = index.coerceIn(0, displayed.lastIndex)
+        return GroupTarget(
+            name = displayed[selected].name,
+            promotedDefault = (config.watchlist.isNotEmpty() || config.lots.isNotEmpty()) && selected == 0,
+        )
+    }
+
+    // editGroup applies a group edit under the mutex to the CURRENT contents of the
+    // captured target: the promoted top-level default group writes back to the
+    // top-level watchlist/lots, a named group to its own stored entry, and a target
+    // that is already gone leaves the config unchanged.
+    private fun editGroup(target: GroupTarget, edit: (ConfigGroup) -> ConfigGroup) {
         mutate { config ->
-            val promoted = config.watchlist.isNotEmpty() || config.lots.isNotEmpty()
-            when {
-                config.groups.isEmpty() -> withTopLevelDefault(config, edit)
-                promoted && selectedGroupIndex() == 0 -> withTopLevelDefault(config, edit)
-                else -> {
-                    val stored = if (promoted) selectedGroupIndex() - 1 else selectedGroupIndex()
-                    if (stored in config.groups.indices) {
-                        config.copy(groups = config.groups.mapIndexed { i, group -> if (i == stored) edit(group) else group })
-                    } else {
-                        config
-                    }
+            if (target.promotedDefault) {
+                if (config.watchlist.isNotEmpty() || config.lots.isNotEmpty() || config.groups.isEmpty()) {
+                    withTopLevelDefault(config, edit)
+                } else {
+                    config
+                }
+            } else {
+                val stored = config.groups.indexOfFirst { it.name == target.name }
+                if (stored < 0) {
+                    config
+                } else {
+                    config.copy(groups = config.groups.mapIndexed { i, group -> if (i == stored) edit(group) else group })
                 }
             }
         }
     }
 
     private fun withTopLevelDefault(config: TickerConfig, edit: (ConfigGroup) -> ConfigGroup): TickerConfig {
-        val edited = edit(ConfigGroup(name = "default", watchlist = config.watchlist, lots = config.lots))
+        val edited = edit(ConfigGroup(name = defaultGroupName, watchlist = config.watchlist, lots = config.lots))
         return config.copy(watchlist = edited.watchlist, lots = edited.lots)
     }
 
-    private fun selectedGroupIndex(): Int = _selectedGroup.value.coerceAtLeast(0)
+    // lotAt captures the content of the lot shown at an index at action time: content is
+    // a lot's only stable identity, so queued changes to the group's lots cannot
+    // redirect a later update or delete onto a different lot.
+    private fun lotAt(target: GroupTarget, index: Int): Lot? {
+        val config = configRepo.config.value ?: return null
+        val group = groupAt(config, target) ?: return null
+        return group.lots.getOrNull(index)
+    }
 
-    // editGroups applies group management to the displayed group list (the promoted
-    // default group first, per withDefaultGroup) and normalizes the result into the
-    // stored groups form so a renamed or removed promoted default group round-trips
-    // through YAML export; displayed indices match the tab row one-for-one.
-    private fun editGroups(edit: (List<ConfigGroup>) -> List<ConfigGroup>) {
-        mutate { config ->
-            val displayed = config.withDefaultGroup().groups
-            val updated = edit(displayed)
-            if (updated == displayed) {
+    private fun groupAt(config: TickerConfig, target: GroupTarget): ConfigGroup? =
+        if (target.promotedDefault) {
+            ConfigGroup(name = defaultGroupName, watchlist = config.watchlist, lots = config.lots)
+        } else {
+            config.groups.firstOrNull { it.name == target.name }
+        }
+
+    // locateLot finds the captured lot in the current list: its captured position while
+    // that still holds the same lot, otherwise the first content match, or -1 when an
+    // earlier queued action already removed it — then the action is a no-op.
+    private fun locateLot(lots: List<Lot>, index: Int, previous: Lot): Int =
+        if (lots.getOrNull(index) == previous) index else lots.indexOfFirst { it == previous }
+
+    // renameGroupAt renames the captured target in the current config. The promoted
+    // default group has no stored name, so renaming it stores it under the new name at
+    // its displayed position; duplicate names are rejected so names stay unique.
+    private fun renameGroupAt(config: TickerConfig, target: GroupTarget, name: String): TickerConfig {
+        val taken = config.withDefaultGroup().groups.mapTo(HashSet()) { it.name }
+        taken.remove(target.name)
+        if (name in taken) return config
+
+        return if (target.promotedDefault) {
+            if (config.watchlist.isEmpty() && config.lots.isEmpty() && config.groups.isNotEmpty()) {
                 config
             } else {
-                config.copy(watchlist = emptyList(), lots = emptyList(), groups = updated)
+                config.copy(
+                    watchlist = emptyList(),
+                    lots = emptyList(),
+                    groups = listOf(ConfigGroup(name = name, watchlist = config.watchlist, lots = config.lots)) + config.groups,
+                )
+            }
+        } else {
+            val stored = config.groups.indexOfFirst { it.name == target.name }
+            if (stored < 0) {
+                config
+            } else {
+                config.copy(groups = config.groups.mapIndexed { i, group -> if (i == stored) group.copy(name = name) else group })
             }
         }
     }
+
+    private fun selectedGroupIndex(): Int = _selectedGroup.value.coerceAtLeast(0)
 
     // write persists a config edit; a failed write is reported through saveError and
     // never thrown at the root scope.
@@ -278,3 +370,7 @@ class HomeViewModel(
         }
     }
 }
+
+// defaultGroupName matches the name withDefaultGroup gives the promoted top-level
+// group; that name is the group's identity across queued mutations.
+private const val defaultGroupName = "default"

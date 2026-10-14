@@ -484,6 +484,9 @@ private fun SettingsSheet(
 
     val intervalValue = interval.trim().toIntOrNull()
     val intervalValid = intervalValue != null && intervalValue >= 0
+    // group names stay unique (a name identifies a group across queued actions), so
+    // add/rename onto a taken name is disabled here and rejected in the view model
+    val takenNames = groups.mapTo(HashSet()) { it.name }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -534,6 +537,7 @@ private fun SettingsSheet(
             groups.forEachIndexed { index, group ->
                 GroupRow(
                     group = group,
+                    isNameTaken = { it in takenNames },
                     onRename = { onRenameGroup(index, it) },
                     onRemove = { onRemoveGroup(index) },
                 )
@@ -553,7 +557,7 @@ private fun SettingsSheet(
                         onAddGroup(newGroupName.trim())
                         newGroupName = ""
                     },
-                    enabled = newGroupName.trim().isNotEmpty(),
+                    enabled = newGroupName.trim().isNotEmpty() && newGroupName.trim() !in takenNames,
                 ) {
                     Text("Add")
                 }
@@ -604,10 +608,12 @@ private fun FlagRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit
 }
 
 // GroupRow renames or removes one displayed group; the rename applies on the button so
-// typing does not restart the poller on every keystroke.
+// typing does not restart the poller on every keystroke. Renaming to a taken name is
+// disabled to keep group names unique.
 @Composable
 private fun GroupRow(
     group: ConfigGroup,
+    isNameTaken: (String) -> Boolean,
     onRename: (String) -> Unit,
     onRemove: () -> Unit,
 ) {
@@ -625,7 +631,7 @@ private fun GroupRow(
         Spacer(Modifier.width(8.dp))
         TextButton(
             onClick = { onRename(name.trim()) },
-            enabled = name.trim().isNotEmpty() && name.trim() != group.name,
+            enabled = name.trim().isNotEmpty() && name.trim() != group.name && !isNameTaken(name.trim()),
         ) {
             Text("Rename")
         }
