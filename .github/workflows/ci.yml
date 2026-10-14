@@ -24,6 +24,13 @@ jobs:
       - name: Run JVM tests
         run: ./gradlew :shared:jvmTest
 
+      - name: Verify no Google/Tracking dependencies
+        run: |
+          ./gradlew :composeApp:dependencies --configuration releaseRuntimeClasspath > deps.txt
+          if grep -Ei "firebase|play-services|com.google.android.gms|crashlytics|analytics|ads" deps.txt; then
+            echo "Forbidden dependency found" && exit 1
+          fi
+
       - name: Assemble debug APK
         run: ./gradlew :composeApp:assembleDebug
 
