@@ -41,3 +41,5 @@ Nothing else. No data leaves your device beyond these requests.
 ## License
 
 GPL-3.0
+
+Release signing configured (ticker-release key).
