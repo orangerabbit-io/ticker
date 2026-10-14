@@ -12,6 +12,7 @@ import io.orangerabbit.ticker.config.defaultGroupName
 import io.orangerabbit.ticker.config.editGroup
 import io.orangerabbit.ticker.config.removeGroup
 import io.orangerabbit.ticker.config.renameGroup
+import io.orangerabbit.ticker.config.replaced
 import io.orangerabbit.ticker.config.target
 import io.orangerabbit.ticker.poll.PollState
 import io.orangerabbit.ticker.poll.QuotePoller
@@ -236,23 +237,35 @@ class HomeViewModel(
             mutationMutex.withLock {
                 val config = configRepo.current() ?: return@withLock
                 val updated = edit(GroupEditState(config, lineage))
-                // no-op edits do not save, avoiding a needless poller restart
-                if (updated.config != config) {
-                    write(updated.config)
+                if (updated.config == config) {
+                    // no-op edits do not save, avoiding a needless poller restart
+                    lineage = updated.lineage
+                } else if (write(updated.config)) {
+                    // lineage commits only with a persisted save: on a failed write the
+                    // previous lineage is retained so targets stay valid for the
+                    // unchanged stored config (saveError reports the failure)
+                    lineage = updated.lineage
                 }
-                lineage = updated.lineage
             }
         }
     }
 
-    // onConfigReplaced resets the default group's lineage when an import replaces the
-    // configuration: targets captured against the old config must not follow groups of
-    // the new one.
-    fun onConfigReplaced() {
+    // importConfig replaces the configuration wholesale inside the mutation critical
+    // section: the new config lands and the lineage resets atomically (see
+    // GroupEditState.replaced), so no queued edit can observe the imported config under
+    // the old lineage — an imported group named "default" can never be deleted through
+    // a stale materialization mapping.
+    fun importConfig(uriString: String, yaml: String, onResult: (Result<Unit>) -> Unit) {
         scope.launch {
-            mutationMutex.withLock {
-                lineage = lineage.next()
+            val result = mutationMutex.withLock {
+                val imported = configRepo.import(uriString, yaml)
+                if (imported.isSuccess) {
+                    val current = configRepo.current() ?: TickerConfig()
+                    lineage = GroupEditState(current, lineage).replaced(current).lineage
+                }
+                imported
             }
+            onResult(result)
         }
     }
 
@@ -291,16 +304,17 @@ class HomeViewModel(
 
     private fun selectedGroupIndex(): Int = _selectedGroup.value.coerceAtLeast(0)
 
-    // write persists a config edit; a failed write is reported through saveError and
-    // never thrown at the root scope.
-    private suspend fun write(config: TickerConfig) {
+    // write persists a config edit and reports whether it was saved; a failed write is
+    // surfaced through saveError and never thrown at the root scope.
+    private suspend fun write(config: TickerConfig): Boolean =
         try {
             configRepo.save(config)
             _saveError.value = null
+            true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             _saveError.value = e.message ?: "failed to save the configuration"
+            false
         }
-    }
 }

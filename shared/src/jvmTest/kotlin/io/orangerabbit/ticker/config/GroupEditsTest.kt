@@ -124,6 +124,23 @@ class GroupEditsTest {
     }
 
     @Test
+    fun `a wholesale config replacement retires the lineage`() {
+        val state = state()
+        val target = state.target(0)
+
+        // an import lands a config whose "default" group is unrelated to the captured
+        // target; the replacement retires the lineage so a stale removal cannot delete
+        // it through the old materialization mapping
+        val replaced = state.addGroup("c").replaced(
+            TickerConfig(groups = listOf(ConfigGroup(name = "default", watchlist = listOf("NET")))),
+        )
+        val stale = replaced.removeGroup(target)
+
+        assertEquals(listOf("default"), stale.config.groups.map { it.name })
+        assertEquals(listOf("NET"), stale.config.groups.single().watchlist)
+    }
+
+    @Test
     fun `actions on a group that is already gone are no-ops`() {
         val state = state(base.copy(groups = emptyList()))
         val target = GroupTarget.Named("b")

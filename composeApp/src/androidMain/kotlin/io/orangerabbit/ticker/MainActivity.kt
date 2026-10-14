@@ -67,13 +67,9 @@ private fun TickerApp(repository: ConfigRepository, viewModel: HomeViewModel) {
 
     val configImport = rememberConfigImport(
         onImported = { uriString, yaml ->
-            scope.launch {
-                repository.import(uriString, yaml).fold(
-                    onSuccess = {
-                        actionError = null
-                        // a replaced configuration starts new group identities
-                        viewModel.onConfigReplaced()
-                    },
+            viewModel.importConfig(uriString, yaml) { result ->
+                result.fold(
+                    onSuccess = { actionError = null },
                     onFailure = { actionError = it.message ?: "import failed" },
                 )
             }

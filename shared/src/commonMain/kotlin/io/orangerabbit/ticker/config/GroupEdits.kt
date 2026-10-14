@@ -59,6 +59,15 @@ fun GroupEditState.target(index: Int): GroupTarget {
     }
 }
 
+// replaced pairs a wholesale configuration replacement with a lineage reset: the new
+// configuration's groups are unrelated to anything captured against the old one, so
+// the old lineage retires and queued edits against it become no-ops instead of landing
+// on whichever new group shares a name. Import runs this inside the same serialization
+// boundary as the edits, so no queued mutation can observe the new config under the old
+// lineage.
+fun GroupEditState.replaced(config: TickerConfig): GroupEditState =
+    GroupEditState(config = config, lineage = lineage.next())
+
 // addGroup appends a named group at the end of the displayed list, materializing the
 // promoted default group into a stored "default" group along the way (normalization).
 // Duplicate names are rejected so names stay unique.
