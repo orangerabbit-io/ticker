@@ -12,13 +12,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 // HomeViewModel drives the home screen: it observes the imported config and keeps the
 // quote poller running for the selected group while the app is in the foreground, and
-// writes add-symbol and lot edits back through the config repository. It lives in
-// androidMain because ConfigRepository is an androidMain interface.
+// writes add-symbol and lot edits back through the config repository. It owns the
+// selected group index as the single source of truth shared by the group tabs, the
+// group pager, and the poller. It lives in androidMain because ConfigRepository is an
+// androidMain interface.
 class HomeViewModel(
     private val poller: QuotePoller,
     private val configRepo: ConfigRepository,
@@ -26,10 +30,15 @@ class HomeViewModel(
 
     val state: StateFlow<PollState> = poller.state
 
+    // selectedGroup is the tab/pager selection and the poller's group; it survives
+    // activity recreation (the view model is a singleton) and resets to the default
+    // group at index 0 when the config changes.
+    private val _selectedGroup = MutableStateFlow(0)
+    val selectedGroup: StateFlow<Int> = _selectedGroup.asStateFlow()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var observation: Job? = null
     private var restart: Job? = null
-    private var groupIndex: Int = 0
     private var lastConfig: TickerConfig? = null
 
     // start begins config observation and is idempotent, so the composition-level start
@@ -45,7 +54,7 @@ class HomeViewModel(
                     // a genuinely changed config resets the selection to the default
                     // group at tab index 0 (matching the screen's tab state)
                     lastConfig = config
-                    groupIndex = 0
+                    _selectedGroup.value = 0
                 }
                 restart?.cancelAndJoin()
                 restart = launch {
@@ -53,7 +62,7 @@ class HomeViewModel(
                         poller.stop()
                     } else {
                         try {
-                            poller.start(config, groupIndex)
+                            poller.start(config, _selectedGroup.value)
                         } catch (e: CancellationException) {
                             // startup superseded by another config change or stop()
                         }
@@ -78,7 +87,8 @@ class HomeViewModel(
     }
 
     fun selectGroup(index: Int) {
-        groupIndex = index
+        if (_selectedGroup.value == index) return
+        _selectedGroup.value = index
         scope.launch { poller.selectGroup(index) }
     }
 
@@ -90,24 +100,38 @@ class HomeViewModel(
         }
     }
 
-    fun saveLot(lot: Lot) {
+    // addLot always appends: a symbol can carry several cost-basis lots.
+    fun addLot(lot: Lot) {
+        editDefaultGroup { group -> group.copy(lots = group.lots + lot) }
+    }
+
+    // updateLot replaces only the lot at the given index in the default group.
+    fun updateLot(index: Int, lot: Lot) {
         editDefaultGroup { group ->
-            val existing = group.lots.indexOfFirst { it.symbol == lot.symbol }
-            if (existing >= 0) {
-                group.copy(lots = group.lots.mapIndexed { index, current -> if (index == existing) lot else current })
+            if (index in group.lots.indices) {
+                group.copy(lots = group.lots.mapIndexed { i, current -> if (i == index) lot else current })
             } else {
-                group.copy(lots = group.lots + lot)
+                group
             }
         }
     }
 
-    fun deleteLot(symbol: String) {
-        editDefaultGroup { group -> group.copy(lots = group.lots.filterNot { it.symbol == symbol }) }
+    // deleteLot removes only the lot at the given index in the default group.
+    fun deleteLot(index: Int) {
+        editDefaultGroup { group ->
+            if (index in group.lots.indices) {
+                group.copy(lots = group.lots.filterIndexed { i, _ -> i != index })
+            } else {
+                group
+            }
+        }
     }
 
     // editDefaultGroup applies edits to the group shown at tab index 0: the promoted
     // top-level watchlist/lots ("default" group) when present, otherwise the first
     // stored group, or a new top-level default when the config has no groups at all.
+    // Lot indices align with the sheet's view because the promotion preserves order.
+    // No-op edits do not save, avoiding a needless poller restart.
     private fun editDefaultGroup(edit: (ConfigGroup) -> ConfigGroup) {
         val config = configRepo.config.value ?: return
         val promoted = config.watchlist.isNotEmpty() || config.lots.isNotEmpty()
@@ -117,6 +141,7 @@ class HomeViewModel(
         } else {
             config.copy(groups = config.groups.mapIndexed { index, group -> if (index == 0) edit(group) else group })
         }
+        if (updated == config) return
         scope.launch { configRepo.save(updated) }
     }
 }

@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -27,40 +29,50 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.orangerabbit.ticker.config.Lot
 import io.orangerabbit.ticker.config.TickerConfig
 import io.orangerabbit.ticker.config.withDefaultGroup
 import io.orangerabbit.ticker.poll.PollState
+import kotlinx.coroutines.launch
 
 // GroupTabsScreen is the app's single screen: a tab row over the config's groups (with
-// the top-level watchlist/lots promoted to a "default" group via withDefaultGroup), the
-// selected group's quote list with optional pinned summary bar and positions section,
-// pull-to-refresh, and add-symbol and lot-editor bottom sheets. With no config imported
-// it shows the SAF import prompt.
+// the top-level watchlist/lots promoted to a "default" group via withDefaultGroup) with
+// a horizontally paged content area cycling the same groups, the selected group's quote
+// list with optional pinned summary bar and positions section, pull-to-refresh, and
+// add-symbol and lot-editor bottom sheets. The selected group comes from the view model
+// (selectedGroup) so tabs, pager, and poller stay in sync across recreation. With no
+// config imported it shows the SAF import prompt.
 @Composable
 fun GroupTabsScreen(
     config: TickerConfig?,
     pollState: PollState,
     error: String?,
+    selectedGroup: Int,
     onImportRequested: () -> Unit,
     onExportRequested: () -> Unit,
     onGroupSelected: (Int) -> Unit,
     onRefresh: () -> Unit,
     onAddSymbol: (String) -> Unit,
-    onSaveLot: (Lot) -> Unit,
-    onDeleteLot: (String) -> Unit,
+    onAddLot: (Lot) -> Unit,
+    onUpdateLot: (Int, Lot) -> Unit,
+    onDeleteLot: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val groups = config?.withDefaultGroup()?.groups.orEmpty()
-    var selectedIndex by remember(config) { mutableStateOf(0) }
     var showAddSheet by remember { mutableStateOf(false) }
     var showLotSheet by remember { mutableStateOf(false) }
 
@@ -103,14 +115,34 @@ fun GroupTabsScreen(
                 modifier = Modifier.padding(16.dp),
             )
             else -> {
-                val selected = selectedIndex.coerceIn(0, groups.lastIndex)
+                val selected = selectedGroup.coerceIn(0, groups.lastIndex)
+                val pagerState = key(groups.size) {
+                    rememberPagerState(initialPage = selected, pageCount = { groups.size })
+                }
+                val scope = rememberCoroutineScope()
+
+                // keep the pager aligned with the view model's selection (config change
+                // resets it to the default group; recreation restores the retained one)
+                LaunchedEffect(selected) {
+                    if (pagerState.currentPage != selected) {
+                        pagerState.scrollToPage(selected)
+                    }
+                }
+                // a pager swipe settles on a page and drives the group selection
+                val currentOnGroupSelected by rememberUpdatedState(onGroupSelected)
+                LaunchedEffect(pagerState) {
+                    snapshotFlow { pagerState.settledPage }.collect { page ->
+                        currentOnGroupSelected(page)
+                    }
+                }
+
                 TabRow(selectedTabIndex = selected) {
                     groups.forEachIndexed { index, group ->
                         Tab(
                             selected = selected == index,
                             onClick = {
-                                selectedIndex = index
                                 onGroupSelected(index)
+                                scope.launch { pagerState.animateScrollToPage(index) }
                             },
                             text = { Text(text = group.name.ifEmpty { "group ${index + 1}" }) },
                         )
@@ -122,12 +154,17 @@ fun GroupTabsScreen(
                 pollState.error?.let { message ->
                     ErrorBanner(message = message, onRetry = onRefresh)
                 }
-                QuoteList(
-                    config = config,
-                    pollState = pollState,
-                    onRefresh = onRefresh,
+                HorizontalPager(
+                    state = pagerState,
                     modifier = Modifier.weight(1f),
-                )
+                ) {
+                    QuoteList(
+                        config = config,
+                        pollState = pollState,
+                        onRefresh = onRefresh,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -158,13 +195,17 @@ fun GroupTabsScreen(
     if (showLotSheet) {
         LotEditorSheet(
             lots = config?.withDefaultGroup()?.groups?.firstOrNull()?.lots.orEmpty(),
-            onSave = {
+            onAdd = {
                 showLotSheet = false
-                onSaveLot(it)
+                onAddLot(it)
             },
-            onDelete = {
+            onUpdate = { index, lot ->
                 showLotSheet = false
-                onDeleteLot(it)
+                onUpdateLot(index, lot)
+            },
+            onDelete = { index ->
+                showLotSheet = false
+                onDeleteLot(index)
             },
             onDismiss = { showLotSheet = false },
         )
@@ -315,17 +356,20 @@ private fun AddSymbolSheet(
     }
 }
 
-// LotEditorSheet adds, updates, and deletes lots of the default group: tapping an
-// existing lot loads it into the fields, Save adds or updates by symbol, and Delete
-// removes the lot with the typed symbol.
+// LotEditorSheet adds, updates, and deletes lots of the default group. A lot is
+// identified by its index: tapping a lot selects and loads it (numeric fields use
+// lossless ungrouped values so no holding data is rounded away), Save updates the
+// selected lot or appends a new one, and Delete removes only the selected lot.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LotEditorSheet(
     lots: List<Lot>,
-    onSave: (Lot) -> Unit,
-    onDelete: (String) -> Unit,
+    onAdd: (Lot) -> Unit,
+    onUpdate: (Int, Lot) -> Unit,
+    onDelete: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var selectedIndex by remember { mutableStateOf<Int?>(null) }
     var symbol by remember { mutableStateOf("") }
     var quantity by remember { mutableStateOf("") }
     var unitCost by remember { mutableStateOf("") }
@@ -339,7 +383,7 @@ private fun LotEditorSheet(
     }
     val trimmedSymbol = symbol.trim()
     val canSave = trimmedSymbol.isNotBlank() && !hasInvalidField
-    val canDelete = lots.any { it.symbol == trimmedSymbol }
+    val selected = selectedIndex?.takeIf { it in lots.indices }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -352,23 +396,41 @@ private fun LotEditorSheet(
             Text(text = "Edit lots", style = MaterialTheme.typography.titleMedium)
             if (lots.isNotEmpty()) {
                 Spacer(Modifier.height(4.dp))
-                lots.forEach { lot ->
+                lots.forEachIndexed { index, lot ->
                     TextButton(
                         onClick = {
+                            selectedIndex = index
                             symbol = lot.symbol
-                            quantity = formatAmount(lot.quantity, false)
-                            unitCost = formatMoney(lot.unitCost)
-                            fixedCost = formatMoney(lot.fixedCost)
+                            quantity = lot.quantity.toString()
+                            unitCost = lot.unitCost.toString()
+                            fixedCost = lot.fixedCost.toString()
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            text = lot.symbol + " · " + formatAmount(lot.quantity, false) +
-                                " @ " + formatMoney(lot.unitCost),
+                            text = (if (index == selected) "▸ " else "") + lot.symbol +
+                                " · " + formatAmount(lot.quantity, false) + " @ " + formatMoney(lot.unitCost),
                             style = MaterialTheme.typography.bodySmall,
+                            fontWeight = if (index == selected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (index == selected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
                         )
                     }
                 }
+            }
+            TextButton(
+                onClick = {
+                    selectedIndex = null
+                    symbol = ""
+                    quantity = ""
+                    unitCost = ""
+                    fixedCost = ""
+                },
+            ) {
+                Text("New lot")
             }
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
@@ -417,23 +479,23 @@ private fun LotEditorSheet(
             Row {
                 Button(
                     onClick = {
-                        onSave(
-                            Lot(
-                                symbol = trimmedSymbol,
-                                unitCost = unitCostValue ?: 0.0,
-                                quantity = quantityValue ?: 0.0,
-                                fixedCost = fixedCostValue ?: 0.0,
-                            ),
+                        val lot = Lot(
+                            symbol = trimmedSymbol,
+                            unitCost = unitCostValue ?: 0.0,
+                            quantity = quantityValue ?: 0.0,
+                            fixedCost = fixedCostValue ?: 0.0,
                         )
+                        val index = selected
+                        if (index != null) onUpdate(index, lot) else onAdd(lot)
                     },
                     enabled = canSave,
                 ) {
-                    Text("Save")
+                    Text(if (selected != null) "Update" else "Add")
                 }
                 Spacer(Modifier.width(8.dp))
                 OutlinedButton(
-                    onClick = { onDelete(trimmedSymbol) },
-                    enabled = canDelete,
+                    onClick = { selected?.let { onDelete(it) } },
+                    enabled = selected != null,
                 ) {
                     Text("Delete")
                 }
