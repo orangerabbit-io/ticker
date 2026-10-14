@@ -12,6 +12,7 @@ import io.orangerabbit.ticker.source.SymbolMapCache
 import io.orangerabbit.ticker.source.yahoo.YahooSession
 import io.orangerabbit.ticker.source.yahoo.YahooSessionStore
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -53,10 +54,12 @@ class DataStoreSymbolMapCache(private val context: Context) : SymbolMapCache {
 
 // DataStoreSessionStore persists the Yahoo handshake session (cookies + crumb) across
 // process restarts. YahooSessionStore's get/put are synchronous by contract, so the
-// store keeps an in-memory mirror: the persisted value is loaded asynchronously at
-// construction, and put() updates the mirror and writes through to the DataStore.
-// get() ignores entries older than 24h so a stale session is re-handshaken instead of
-// reused. Persistence is best-effort: a broken cache only costs an extra handshake.
+// store keeps an in-memory mirror loaded asynchronously at construction; put() updates
+// the mirror and writes through to the DataStore. preload() is the readiness barrier:
+// it suspends until the initial load completes so get() cannot miss a fresh persisted
+// session on cold start. get() ignores entries older than 24h so a stale session is
+// re-handshaken instead of reused. Persistence is best-effort: a broken cache only
+// costs an extra handshake.
 class DataStoreSessionStore(
     context: Context,
     private val clock: () -> Long = { System.currentTimeMillis() },
@@ -65,27 +68,37 @@ class DataStoreSessionStore(
     private val dataStore = context.cacheDataStore
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Any()
+    private val preloadDone = CompletableDeferred<Unit>()
     private var session: YahooSession? = null
     private var savedAt = 0L
     private var written = false
 
     init {
         scope.launch {
-            val prefs = try {
-                dataStore.data.first()
+            try {
+                val prefs = dataStore.data.first()
+                synchronized(lock) {
+                    // a session written before the preload finished wins over the stored one
+                    if (!written) {
+                        session = decodeSession(prefs[yahooSessionKey])
+                        savedAt = prefs[yahooSessionSavedAtKey] ?: 0L
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                return@launch
-            }
-            synchronized(lock) {
-                // a session written before the preload finished wins over the stored one
-                if (!written) {
-                    session = decodeSession(prefs[yahooSessionKey])
-                    savedAt = prefs[yahooSessionSavedAtKey] ?: 0L
-                }
+                // a broken cache only costs a handshake
+            } finally {
+                // completes on success and failure alike so preload never blocks forever
+                preloadDone.complete(Unit)
             }
         }
+    }
+
+    // preload suspends until the initial persisted load completes (or fails). It is
+    // idempotent and never suspends again after the first load.
+    override suspend fun preload() {
+        preloadDone.await()
     }
 
     override fun get(): YahooSession? {

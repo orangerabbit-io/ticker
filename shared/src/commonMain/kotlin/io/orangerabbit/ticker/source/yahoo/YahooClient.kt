@@ -87,6 +87,9 @@ class YahooClient(
     }
 
     private suspend fun fetchQuotes(symbols: List<String>, fields: List<String>): List<ResponseQuote> {
+        // await any deferred session initialization first so a persisted session is
+        // used on cold start instead of a redundant handshake racing the load
+        sessionStore.preload()
         var session = sessionStore.get()
         if (session == null) {
             session = refresh()

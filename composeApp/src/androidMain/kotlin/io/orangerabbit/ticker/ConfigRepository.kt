@@ -34,6 +34,11 @@ interface ConfigRepository {
     // (config emits null in that case).
     val configError: StateFlow<String?>
 
+    // current reads the stored config directly. Unlike the asynchronously updated
+    // config StateFlow it is read-after-write consistent with save(), so serialized
+    // read-modify-write edits always compose against the current state.
+    suspend fun current(): TickerConfig?
+
     suspend fun import(uriString: String, yaml: String): Result<Unit>
     suspend fun export(uriString: String): Result<Unit>
     suspend fun save(config: TickerConfig)
@@ -58,6 +63,9 @@ class ConfigRepositoryImpl(private val context: Context) : ConfigRepository {
         .onEach { _configError.value = it.error }
         .map { it.config }
         .stateIn(scope, SharingStarted.Eagerly, null)
+
+    override suspend fun current(): TickerConfig? =
+        parseStored(context.configDataStore.data.first()[configJsonKey]).config
 
     override suspend fun import(uriString: String, yaml: String): Result<Unit> {
         val imported = parseTickerConfig(yaml).getOrElse { e ->

@@ -11,11 +11,41 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.TextContent
 import io.ktor.http.decodeURLQueryComponent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+
+// PreloadingSessionStore models a persisted session that only becomes visible after a
+// suspending load: get() before preload() completes sees nothing, like the DataStore
+// mirror before its asynchronous read lands on a cold start.
+private class PreloadingSessionStore(
+    private val persisted: YahooSession,
+) : YahooSessionStore {
+
+    var loaded = false
+    var getBeforePreloadCompleted = false
+    private var written: YahooSession? = null
+
+    override fun get(): YahooSession? {
+        if (!loaded) {
+            getBeforePreloadCompleted = true
+            return written
+        }
+        return written ?: persisted
+    }
+
+    override fun put(session: YahooSession) {
+        written = session
+    }
+
+    override suspend fun preload() {
+        yield()
+        loaded = true
+    }
+}
 
 class YahooClientTest {
 
@@ -82,6 +112,26 @@ class YahooClientTest {
         val session = assertNotNull(store.get())
         assertEquals("foo.bar", session.crumb)
         assertTrue(session.cookies.contains("A3" to "cookie-a3-value"))
+    }
+
+    @Test
+    fun `persisted session is awaited through preload before first use`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val store = PreloadingSessionStore(YahooSession(cookies = listOf("A3" to "seed-a3"), crumb = "seed.crumb"))
+        val replies = listOf(
+            MockReply(HttpStatusCode.OK, body = fixture("quote-regular.json")),
+        )
+        val client = YahooClient(mockClient(replies, recorded), store)
+
+        val result = client.getQuotes(listOf("AAPL", "BTC-USD"))
+
+        assertEquals(2, result.getOrThrow().size)
+        assertFalse(store.getBeforePreloadCompleted, "get() must not run before the preload completes")
+        assertEquals(1, recorded.size)
+        val quoteRequest = recorded[0]
+        assertTrue(quoteRequest.url.toString().contains("/v7/finance/quote"))
+        assertTrue(quoteRequest.url.toString().contains("crumb=seed.crumb"))
+        assertTrue(cookieHeader(quoteRequest).contains("A3=seed-a3"))
     }
 
     @Test

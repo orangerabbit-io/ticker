@@ -10,6 +10,12 @@ data class YahooSession(
 interface YahooSessionStore {
     fun get(): YahooSession?
     fun put(session: YahooSession)
+
+    // preload suspends until any deferred initialization (e.g. an asynchronous load of
+    // a persisted session) has completed so get() cannot miss it on cold start; stores
+    // without deferred state do nothing. It must complete even when nothing is
+    // persisted or the load fails.
+    suspend fun preload() {}
 }
 
 class InMemorySessionStore : YahooSessionStore {

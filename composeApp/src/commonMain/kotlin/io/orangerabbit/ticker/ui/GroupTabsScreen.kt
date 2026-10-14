@@ -94,6 +94,9 @@ fun GroupTabsScreen(
     modifier: Modifier = Modifier,
 ) {
     val groups = config?.withDefaultGroup()?.groups.orEmpty()
+    // the selected group is the tab/pager selection and the target of the editing
+    // sheets; an empty config edits the (not yet created) default group at index 0
+    val selected = if (groups.isEmpty()) 0 else selectedGroup.coerceIn(0, groups.lastIndex)
     var showSymbolsSheet by remember { mutableStateOf(false) }
     var showLotSheet by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
@@ -159,7 +162,6 @@ fun GroupTabsScreen(
                     )
                 }
             } else {
-                val selected = selectedGroup.coerceIn(0, groups.lastIndex)
                 val pagerState = key(groups.size) {
                     rememberPagerState(initialPage = selected, pageCount = { groups.size })
                 }
@@ -231,7 +233,7 @@ fun GroupTabsScreen(
 
     if (showSymbolsSheet) {
         SymbolsSheet(
-            symbols = defaultWatchlist(config),
+            symbols = explicitWatchlist(config, selected),
             onAdd = {
                 showSymbolsSheet = false
                 onAddSymbol(it)
@@ -242,7 +244,7 @@ fun GroupTabsScreen(
     }
     if (showLotSheet) {
         LotEditorSheet(
-            lots = config?.withDefaultGroup()?.groups?.firstOrNull()?.lots.orEmpty(),
+            lots = groups.getOrNull(selected)?.lots.orEmpty(),
             onAdd = {
                 showLotSheet = false
                 onAddLot(it)
@@ -381,20 +383,22 @@ private fun NoConfigImported(
     }
 }
 
-// defaultWatchlist lists the default group's explicit watchlist entries — the ones
-// symbol removal can act on: the promoted top-level watchlist when present (or when
-// the config has no groups yet), otherwise the first stored group's. Lot-owned
-// symbols stay managed in the lot editor.
-private fun defaultWatchlist(config: TickerConfig?): List<String> {
+// explicitWatchlist lists a group's explicit watchlist entries — the ones symbol
+// removal can act on. The promoted default group's entries live in the top-level
+// watchlist (index 0 while promotion applies), named groups carry their own, and an
+// empty config's future default group reads the top level. Lot-owned symbols stay
+// managed in the lot editor.
+private fun explicitWatchlist(config: TickerConfig?, index: Int): List<String> {
     if (config == null) return emptyList()
-    return if (config.watchlist.isNotEmpty() || config.lots.isNotEmpty() || config.groups.isEmpty()) {
-        config.watchlist
-    } else {
-        config.groups.first().watchlist
+    val promoted = config.watchlist.isNotEmpty() || config.lots.isNotEmpty()
+    return when {
+        config.groups.isEmpty() -> config.watchlist
+        promoted && index == 0 -> config.watchlist
+        else -> config.groups.getOrNull(if (promoted) index - 1 else index)?.watchlist.orEmpty()
     }
 }
 
-// SymbolsSheet adds a typed symbol to the default group's watchlist and removes
+// SymbolsSheet adds a typed symbol to the selected group's watchlist and removes
 // mistaken entries through the config repository; the poller restarts when the saved
 // config emits. The sheet stays open across removals so several can be done at once.
 @OptIn(ExperimentalMaterial3Api::class)
@@ -631,7 +635,7 @@ private fun GroupRow(
     }
 }
 
-// LotEditorSheet adds, updates, and deletes lots of the default group. A lot is
+// LotEditorSheet adds, updates, and deletes lots of the selected group. A lot is
 // identified by its index: tapping a lot selects and loads it (numeric fields use
 // lossless ungrouped values so no holding data is rounded away), Save updates the
 // selected lot or appends a new one, and Delete removes only the selected lot.

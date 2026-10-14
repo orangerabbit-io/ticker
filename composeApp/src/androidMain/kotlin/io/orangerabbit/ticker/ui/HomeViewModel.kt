@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 // HomeViewModel drives the home screen: it observes the imported config and keeps the
 // quote poller running for the selected group while the app is in the foreground, and
@@ -114,36 +116,37 @@ class HomeViewModel(
         scope.launch(owner) { block() }
     }
 
+    // addSymbol adds to the SELECTED group: a promoted top-level default group writes
+    // back to the top-level watchlist, a named group to its own entry.
     fun addSymbol(symbol: String) {
         val trimmed = symbol.trim()
         if (trimmed.isEmpty()) return
-        editDefaultGroup { group ->
+        editSelectedGroup { group ->
             if (trimmed in group.watchlist) group else group.copy(watchlist = group.watchlist + trimmed)
         }
     }
 
-    // removeSymbol removes a watchlist entry of the default group (a lot-owned symbol
+    // removeSymbol removes a watchlist entry of the selected group (a lot-owned symbol
     // stays visible through the implicit watchlist until its lots are edited away).
     fun removeSymbol(symbol: String) {
-        editDefaultGroup { group -> group.copy(watchlist = group.watchlist.filterNot { it == symbol }) }
+        editSelectedGroup { group -> group.copy(watchlist = group.watchlist.filterNot { it == symbol }) }
     }
 
     // updateSettings applies the settings sheet's interval, sort mode, and display
     // flags as a single write.
     fun updateSettings(settings: SettingsUpdate) {
-        val config = configRepo.config.value ?: return
         if (settings.interval < 0) return
-        val updated = config.copy(
-            interval = settings.interval,
-            sort = settings.sort,
-            showTags = settings.showTags,
-            showFundamentals = settings.showFundamentals,
-            showSeparator = settings.showSeparator,
-            showSummary = settings.showSummary,
-            showPositions = settings.showPositions,
-        )
-        if (updated == config) return
-        scope.launch { write(updated) }
+        mutate { config ->
+            config.copy(
+                interval = settings.interval,
+                sort = settings.sort,
+                showTags = settings.showTags,
+                showFundamentals = settings.showFundamentals,
+                showSeparator = settings.showSeparator,
+                showSummary = settings.showSummary,
+                showPositions = settings.showPositions,
+            )
+        }
     }
 
     fun addGroup(name: String) {
@@ -168,14 +171,15 @@ class HomeViewModel(
         editGroups { groups -> groups.filterIndexed { i, _ -> i != index } }
     }
 
-    // addLot always appends: a symbol can carry several cost-basis lots.
+    // addLot always appends to the selected group: a symbol can carry several cost-basis
+    // lots.
     fun addLot(lot: Lot) {
-        editDefaultGroup { group -> group.copy(lots = group.lots + lot) }
+        editSelectedGroup { group -> group.copy(lots = group.lots + lot) }
     }
 
-    // updateLot replaces only the lot at the given index in the default group.
+    // updateLot replaces only the lot at the given index in the selected group.
     fun updateLot(index: Int, lot: Lot) {
-        editDefaultGroup { group ->
+        editSelectedGroup { group ->
             if (index in group.lots.indices) {
                 group.copy(lots = group.lots.mapIndexed { i, current -> if (i == index) lot else current })
             } else {
@@ -184,9 +188,9 @@ class HomeViewModel(
         }
     }
 
-    // deleteLot removes only the lot at the given index in the default group.
+    // deleteLot removes only the lot at the given index in the selected group.
     fun deleteLot(index: Int) {
-        editDefaultGroup { group ->
+        editSelectedGroup { group ->
             if (index in group.lots.indices) {
                 group.copy(lots = group.lots.filterIndexed { i, _ -> i != index })
             } else {
@@ -195,35 +199,69 @@ class HomeViewModel(
         }
     }
 
-    // editDefaultGroup applies edits to the group shown at tab index 0: the promoted
-    // top-level watchlist/lots ("default" group) when present, otherwise the first
-    // stored group, or a new top-level default when the config has no groups at all.
-    // Lot indices align with the sheet's view because the promotion preserves order.
-    // No-op edits do not save, avoiding a needless poller restart.
-    private fun editDefaultGroup(edit: (ConfigGroup) -> ConfigGroup) {
-        val config = configRepo.config.value ?: return
-        val promoted = config.watchlist.isNotEmpty() || config.lots.isNotEmpty()
-        val updated = if (promoted || config.groups.isEmpty()) {
-            val default = edit(ConfigGroup(name = "default", watchlist = config.watchlist, lots = config.lots))
-            config.copy(watchlist = default.watchlist, lots = default.lots)
-        } else {
-            config.copy(groups = config.groups.mapIndexed { index, group -> if (index == 0) edit(group) else group })
+    // mutationMutex serializes read-modify-write config edits so rapid consecutive
+    // actions compose: every mutation reads the CURRENT stored config inside the
+    // critical section (read-after-write consistent with save) instead of a snapshot
+    // captured at action time, which let a later save restore what an earlier one
+    // removed.
+    private val mutationMutex = Mutex()
+
+    private fun mutate(edit: (TickerConfig) -> TickerConfig) {
+        scope.launch {
+            mutationMutex.withLock {
+                val config = configRepo.current() ?: return@withLock
+                val updated = edit(config)
+                // no-op edits do not save, avoiding a needless poller restart
+                if (updated != config) {
+                    write(updated)
+                }
+            }
         }
-        if (updated == config) return
-        scope.launch { write(updated) }
     }
+
+    // editSelectedGroup applies edits to the group shown at the selected tab: the
+    // promoted top-level default group (written back to the top-level watchlist/lots)
+    // when it is selected, the matching stored group otherwise, or a new top-level
+    // default when the config has no groups at all. Lot and symbol indices align with
+    // the sheets' view because the promotion preserves order.
+    private fun editSelectedGroup(edit: (ConfigGroup) -> ConfigGroup) {
+        mutate { config ->
+            val promoted = config.watchlist.isNotEmpty() || config.lots.isNotEmpty()
+            when {
+                config.groups.isEmpty() -> withTopLevelDefault(config, edit)
+                promoted && selectedGroupIndex() == 0 -> withTopLevelDefault(config, edit)
+                else -> {
+                    val stored = if (promoted) selectedGroupIndex() - 1 else selectedGroupIndex()
+                    if (stored in config.groups.indices) {
+                        config.copy(groups = config.groups.mapIndexed { i, group -> if (i == stored) edit(group) else group })
+                    } else {
+                        config
+                    }
+                }
+            }
+        }
+    }
+
+    private fun withTopLevelDefault(config: TickerConfig, edit: (ConfigGroup) -> ConfigGroup): TickerConfig {
+        val edited = edit(ConfigGroup(name = "default", watchlist = config.watchlist, lots = config.lots))
+        return config.copy(watchlist = edited.watchlist, lots = edited.lots)
+    }
+
+    private fun selectedGroupIndex(): Int = _selectedGroup.value.coerceAtLeast(0)
 
     // editGroups applies group management to the displayed group list (the promoted
     // default group first, per withDefaultGroup) and normalizes the result into the
     // stored groups form so a renamed or removed promoted default group round-trips
     // through YAML export; displayed indices match the tab row one-for-one.
     private fun editGroups(edit: (List<ConfigGroup>) -> List<ConfigGroup>) {
-        val config = configRepo.config.value ?: return
-        val displayed = config.withDefaultGroup().groups
-        val updated = edit(displayed)
-        if (updated == displayed) return
-        scope.launch {
-            write(config.copy(watchlist = emptyList(), lots = emptyList(), groups = updated))
+        mutate { config ->
+            val displayed = config.withDefaultGroup().groups
+            val updated = edit(displayed)
+            if (updated == displayed) {
+                config
+            } else {
+                config.copy(watchlist = emptyList(), lots = emptyList(), groups = updated)
+            }
         }
     }
 
