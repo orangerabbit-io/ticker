@@ -44,7 +44,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.orangerabbit.ticker.config.ConfigGroup
@@ -265,20 +264,15 @@ fun GroupTabsScreen(
         )
     }
     if (showLotSheet) {
+        // add, update, and delete keep the sheet open (it returns to the lot list
+        // re-reading the updated lots); only dismiss closes it — the VM recaptures
+        // the target group at action time
         LotEditorSheet(
+            groupName = groups.getOrNull(selected)?.name.orEmpty().ifEmpty { "group ${selected + 1}" },
             lots = groups.getOrNull(selected)?.lots.orEmpty(),
-            onAdd = {
-                showLotSheet = false
-                onAddLot(it)
-            },
-            onUpdate = { index, lot ->
-                showLotSheet = false
-                onUpdateLot(index, lot)
-            },
-            onDelete = { index ->
-                showLotSheet = false
-                onDeleteLot(index)
-            },
+            onAdd = onAddLot,
+            onUpdate = onUpdateLot,
+            onDelete = onDeleteLot,
             onDismiss = { showLotSheet = false },
         )
     }
@@ -772,24 +766,56 @@ private fun GroupRow(
     }
 }
 
-// LotEditorSheet adds, updates, and deletes lots of the selected group. A lot is
-// identified by its index: tapping a lot selects and loads it (numeric fields use
-// lossless ungrouped values so no holding data is rounded away), Save updates the
-// selected lot or appends a new one, and Delete removes only the selected lot.
+// LotSheetMode is the lot sheet's list-first state machine: the sheet opens on the
+// lot list (a blank editor is never the initial state), "Add lot" opens a blank
+// editor (editingIndex null), and tapping a row opens that row's prefill editor.
+private sealed interface LotSheetMode {
+    data object List : LotSheetMode
+
+    // editingIndex is a row of the lots list currently rendered; null = new lot
+    data class Editor(val editingIndex: Int?) : LotSheetMode
+}
+
+// LotEditorSheet edits the selected group's lots, list-first: it opens listing the
+// lots as `SYMBOL  qty @ cost  fee x` rows, the only creation path is Add lot → blank
+// editor → Save, and tapping a row opens a prefill editor (numeric fields use lossless
+// ungrouped Double.toString() values so no holding data is rounded away) with
+// Update/Delete. Add, update, and delete return to the list — only dismiss closes the
+// sheet — and every action targets the index of a row of the list currently rendered
+// (the callbacks recapture the target group at action time).
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LotEditorSheet(
+    groupName: String,
     lots: List<Lot>,
     onAdd: (Lot) -> Unit,
     onUpdate: (Int, Lot) -> Unit,
     onDelete: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var selectedIndex by remember { mutableStateOf<Int?>(null) }
+    var lotMode by remember { mutableStateOf<LotSheetMode>(LotSheetMode.List) }
     var symbol by remember { mutableStateOf("") }
     var quantity by remember { mutableStateOf("") }
     var unitCost by remember { mutableStateOf("") }
     var fixedCost by remember { mutableStateOf("") }
+
+    // a config change can replace the lots under the sheet (an import rewrites the
+    // config): an editing index past the new list is stale — the sheet falls back to
+    // the list instead of editing or deleting the wrong row
+    val editor = when (val mode = lotMode) {
+        is LotSheetMode.Editor -> {
+            val index = mode.editingIndex
+            if (index == null || index in lots.indices) mode else null
+        }
+        LotSheetMode.List -> null
+    }
+    LaunchedEffect(lots, lotMode) {
+        val index = (lotMode as? LotSheetMode.Editor)?.editingIndex
+        if (index != null && index !in lots.indices) {
+            lotMode = LotSheetMode.List
+        }
+    }
+    val editingIndex = editor?.editingIndex
 
     val quantityValue = parseFinite(quantity)
     val unitCostValue = parseFinite(unitCost)
@@ -801,7 +827,16 @@ private fun LotEditorSheet(
     }
     val trimmedSymbol = symbol.trim()
     val canSave = trimmedSymbol.isNotBlank() && !hasInvalidField
-    val selected = selectedIndex?.takeIf { it in lots.indices }
+
+    // openEditor moves to the editor mode: a tapped row prefills every field with its
+    // lossless values, the single Add lot action opens the same editor blank
+    fun openEditor(index: Int?, lot: Lot?) {
+        lotMode = LotSheetMode.Editor(index)
+        symbol = lot?.symbol.orEmpty()
+        quantity = lot?.quantity?.toString().orEmpty()
+        unitCost = lot?.unitCost?.toString().orEmpty()
+        fixedCost = lot?.fixedCost?.toString().orEmpty()
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -811,115 +846,118 @@ private fun LotEditorSheet(
                 .padding(bottom = 32.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            Text(text = "Edit lots", style = MaterialTheme.typography.titleMedium)
-            if (lots.isNotEmpty()) {
+            Text(text = "Lots — $groupName", style = MaterialTheme.typography.titleMedium)
+            if (editor == null) {
                 Spacer(Modifier.height(4.dp))
+                if (lots.isEmpty()) {
+                    Text(
+                        text = "No lots yet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 lots.forEachIndexed { index, lot ->
                     TextButton(
-                        onClick = {
-                            selectedIndex = index
-                            symbol = lot.symbol
-                            quantity = lot.quantity.toString()
-                            unitCost = lot.unitCost.toString()
-                            fixedCost = lot.fixedCost.toString()
-                        },
+                        onClick = { openEditor(index, lot) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            text = (if (index == selected) "▸ " else "") + lot.symbol +
-                                " · " + formatAmount(lot.quantity, false) + " @ " + formatMoney(lot.unitCost),
+                            text = lot.symbol + "  " + formatAmount(lot.quantity, false) +
+                                " @ " + formatMoney(lot.unitCost) +
+                                "  fee " + formatMoney(lot.fixedCost),
                             style = MaterialTheme.typography.bodySmall,
-                            fontWeight = if (index == selected) FontWeight.Bold else FontWeight.Normal,
-                            color = if (index == selected) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 }
-            }
-            TextButton(
-                onClick = {
-                    selectedIndex = null
-                    symbol = ""
-                    quantity = ""
-                    unitCost = ""
-                    fixedCost = ""
-                },
-            ) {
-                Text("New lot")
-            }
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = symbol,
-                onValueChange = { symbol = it },
-                label = { Text("Symbol") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = quantity,
-                onValueChange = { quantity = it },
-                label = { Text("Quantity") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = unitCost,
-                onValueChange = { unitCost = it },
-                label = { Text("Unit cost") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = fixedCost,
-                onValueChange = { fixedCost = it },
-                label = { Text("Fixed cost") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            if (hasInvalidField) {
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "Quantity, unit cost, and fixed cost must be finite numbers",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+                Row {
+                    Button(onClick = { openEditor(null, null) }) {
+                        Text("Add lot")
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = onDismiss) {
+                        Text("Close")
+                    }
+                }
+            } else {
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = symbol,
+                    onValueChange = { symbol = it },
+                    label = { Text("Symbol") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
                 )
-            }
-            Spacer(Modifier.height(12.dp))
-            Row {
-                Button(
-                    onClick = {
-                        val lot = Lot(
-                            symbol = trimmedSymbol,
-                            unitCost = unitCostValue ?: 0.0,
-                            quantity = quantityValue ?: 0.0,
-                            fixedCost = fixedCostValue ?: 0.0,
-                        )
-                        val index = selected
-                        if (index != null) onUpdate(index, lot) else onAdd(lot)
-                    },
-                    enabled = canSave,
-                ) {
-                    Text(if (selected != null) "Update" else "Add")
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = quantity,
+                    onValueChange = { quantity = it },
+                    label = { Text("Quantity") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = unitCost,
+                    onValueChange = { unitCost = it },
+                    label = { Text("Unit cost") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = fixedCost,
+                    onValueChange = { fixedCost = it },
+                    label = { Text("Fixed cost") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (hasInvalidField) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Quantity, unit cost, and fixed cost must be finite numbers",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(
-                    onClick = { selected?.let { onDelete(it) } },
-                    enabled = selected != null,
-                ) {
-                    Text("Delete")
-                }
-                Spacer(Modifier.width(8.dp))
-                TextButton(onClick = onDismiss) {
-                    Text("Close")
+                Spacer(Modifier.height(12.dp))
+                Row {
+                    Button(
+                        onClick = {
+                            val lot = Lot(
+                                symbol = trimmedSymbol,
+                                unitCost = unitCostValue ?: 0.0,
+                                quantity = quantityValue ?: 0.0,
+                                fixedCost = fixedCostValue ?: 0.0,
+                            )
+                            val index = editingIndex
+                            // the action keeps the sheet open: back on the list
+                            lotMode = LotSheetMode.List
+                            if (index != null) onUpdate(index, lot) else onAdd(lot)
+                        },
+                        enabled = canSave,
+                    ) {
+                        Text(if (editingIndex != null) "Update" else "Save")
+                    }
+                    if (editingIndex != null) {
+                        Spacer(Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                lotMode = LotSheetMode.List
+                                onDelete(editingIndex)
+                            },
+                        ) {
+                            Text("Delete")
+                        }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = { lotMode = LotSheetMode.List }) {
+                        Text("Back")
+                    }
                 }
             }
         }
