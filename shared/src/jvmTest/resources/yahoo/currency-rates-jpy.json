@@ -1,0 +1,21 @@
+{
+  "quoteResponse": {
+    "result": [
+      {
+        "language": "en-US",
+        "region": "US",
+        "quoteType": "CURRENCY",
+        "typeDisp": "Currency",
+        "currency": "USD",
+        "marketState": "REGULAR",
+        "exchange": "CCY",
+        "fullExchangeName": "CCY",
+        "exchangeDataDelayedBy": 0,
+        "symbol": "JPYUSD=X",
+        "shortName": "JPY/USD",
+        "regularMarketPrice": { "raw": 150.0, "fmt": "150.00" }
+      }
+    ],
+    "error": null
+  }
+}

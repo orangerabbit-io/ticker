@@ -211,7 +211,7 @@ Expected: BUILD SUCCESSFUL.
   - `typealias TickerSymbolMap = Map<String, SymbolSourceMap>`
   - `fun parseSymbolsCsv(body: String): TickerSymbolMap` — rows `[ticker(.X), sourceSymbol, sourceId]`; sourceId `"cb"` → COINBASE else UNKNOWN; first occurrence wins on duplicate ticker (CSV has dupes).
   - `data class ResolvedGroup(val group: ConfigGroup, val yahooSymbols: List<String>, val coinbaseProducts: List<String>, val unresolved: List<String>)`
-  - `fun resolveGroup(group: ConfigGroup, symbolMap: TickerSymbolMap): ResolvedGroup` — no suffix → yahoo; `.CB` suffix → strip suffix, coinbase product; `.X` → exact lookup with the `SOL.X`-style key (map key includes `.X`; the resolved `sourceSymbol` is the source-native symbol e.g. `SOL-USD`), source COINBASE → coinbase bucket, UNKNOWN source or missing key → `unresolved`. Watchlist order preserved per bucket; symbols in `lots` absent from watchlist appended to watchlist first (CLI implicit-watch rule, deduped case-insensitive).
+  - `fun resolveGroup(group: ConfigGroup, symbolMap: TickerSymbolMap): ResolvedGroup` — no suffix → yahoo; `.CB` suffix → strip suffix, coinbase product; `.X` → exact lookup with the `SOL.X`-style key (map key includes `.X`; the resolved `sourceSymbol` is the source-native symbol e.g. `SOL-USD`), source COINBASE → coinbase bucket, UNKNOWN source or missing key → `unresolved`. Watchlist order preserved per bucket; symbols in `lots` absent from watchlist appended to watchlist first (CLI implicit-watch rule, deduped case-insensitive). Ruling: CLI processes watchlist first, then lots (cli.go — watchlist loop precedes lots loop), so implicit lot symbols are appended AFTER the original watchlist, not prepended.
 
 - [ ] **Step 1: Write failing tests** — routing: `AAPL`→yahoo, `BTC.CB`→coinbase product `BTC`, `ACH.X` with fixture row `ACH.X,ACH-USD,cb` → coinbase `ACH-USD`, `10SET.X` (fixture `10SET.X,,xx`) → unresolved; implicit lot symbol added once (config with lots ABC, watchlist ABC,DEF → watchlist becomes ABC,DEF); CSV parse with duplicate row keeps first; empty body → empty map (not error).
 - [ ] **Step 2: Run** `--tests "*Symbols*"` — Expected: FAIL.
@@ -267,7 +267,7 @@ Expected: BUILD SUCCESSFUL.
 - [ ] **Step 2: Run** `--tests "*ConfigJsonTest*"` — Expected: FAIL.
 - [ ] **Step 3: Implement** JSON DTOs + mapping in `:shared`. Run — PASS.
 - [ ] **Step 4: Commit** `feat: config json serialization for datastore`
-- [ ] **Step 5: Implement Android shell** — DataStore repository (SAF via `androidx.documentfile`? No: `contentResolver.openInputStream/openOutputStream` with persisted URI permissions), import → parse → save (failure → user-visible message via returned `Result`), export → `toYaml()`; `GroupTabsScreen` with tab row (from `config.withDefaultGroup().groups`) + empty state prompting import; MainActivity sets content with theme; Koin wiring. CI is the only build check for this task.
+- [ ] **Step 5: Implement Android shell** — DataStore repository (SAF via `contentResolver.openInputStream`/`openOutputStream` with persisted URI permissions), import → parse → save (failure → user-visible message via returned `Result`), export → `toYaml()`; `GroupTabsScreen` with tab row (from `config.withDefaultGroup().groups`) + empty state prompting import; MainActivity sets content with theme; Koin wiring. CI is the only build check for this task.
 - [ ] **Step 6: Run** `nix develop -c ./gradlew :shared:jvmTest` — Expected: PASS (shell compiles in CI only).
 - [ ] **Step 7: Commit** `feat: android shell with datastore config and saf import/export`
 
