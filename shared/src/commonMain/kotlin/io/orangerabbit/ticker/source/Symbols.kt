@@ -47,6 +47,19 @@ fun parseSymbolsCsv(body: String): TickerSymbolMap {
     return map
 }
 
+// reverseSymbolMap inverts the parsed map to sourceSymbol → tickerSymbol so a
+// source-native symbol (e.g. a Coinbase product id) can be proposed as its configured
+// ".X" shorthand. Rows are visited in CSV order and, mirroring parseSymbolsCsv's
+// first-wins rule, the first row for a duplicated source symbol is kept.
+fun reverseSymbolMap(forward: TickerSymbolMap): Map<String, String> {
+    val map = LinkedHashMap<String, String>()
+    for (row in forward.values) {
+        if (map.containsKey(row.sourceSymbol)) continue
+        map[row.sourceSymbol] = row.tickerSymbol
+    }
+    return map
+}
+
 // Port of the CLI's group symbol routing. Symbols without a suffix go to Yahoo; a ".CB"
 // suffix is stripped to a Coinbase product id; a ".X" suffix is resolved through the
 // ticker-static map (exact key, the map key keeps the ".X" suffix) to its source-native
