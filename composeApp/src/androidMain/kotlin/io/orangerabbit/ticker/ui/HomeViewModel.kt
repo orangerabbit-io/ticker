@@ -37,6 +37,12 @@ class HomeViewModel(
     private val _selectedGroup = MutableStateFlow(0)
     val selectedGroup: StateFlow<Int> = _selectedGroup.asStateFlow()
 
+    // saveError surfaces non-cancellation config write failures (e.g. serialization
+    // rejecting a value) through the UI instead of letting them escape the root scope
+    // and crash the app.
+    private val _saveError = MutableStateFlow<String?>(null)
+    val saveError: StateFlow<String?> = _saveError.asStateFlow()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var observation: Job? = null
     private var restart: Job? = null
@@ -157,6 +163,19 @@ class HomeViewModel(
             config.copy(groups = config.groups.mapIndexed { index, group -> if (index == 0) edit(group) else group })
         }
         if (updated == config) return
-        scope.launch { configRepo.save(updated) }
+        scope.launch { write(updated) }
+    }
+
+    // write persists a config edit; a failed write is reported through saveError and
+    // never thrown at the root scope.
+    private suspend fun write(config: TickerConfig) {
+        try {
+            configRepo.save(config)
+            _saveError.value = null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _saveError.value = e.message ?: "failed to save the configuration"
+        }
     }
 }

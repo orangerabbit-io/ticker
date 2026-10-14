@@ -375,11 +375,13 @@ private fun LotEditorSheet(
     var unitCost by remember { mutableStateOf("") }
     var fixedCost by remember { mutableStateOf("") }
 
-    val quantityValue = quantity.trim().toDoubleOrNull()
-    val unitCostValue = unitCost.trim().toDoubleOrNull()
-    val fixedCostValue = fixedCost.trim().toDoubleOrNull()
+    val quantityValue = parseFinite(quantity)
+    val unitCostValue = parseFinite(unitCost)
+    val fixedCostValue = parseFinite(fixedCost)
+    // NaN, Infinity, and overflowed literals (1e309) are rejected alongside
+    // non-numeric input: the JSON serializer cannot represent them
     val hasInvalidField = listOf(quantity, unitCost, fixedCost).any {
-        it.isNotBlank() && it.trim().toDoubleOrNull() == null
+        it.isNotBlank() && parseFinite(it) == null
     }
     val trimmedSymbol = symbol.trim()
     val canSave = trimmedSymbol.isNotBlank() && !hasInvalidField
@@ -470,7 +472,7 @@ private fun LotEditorSheet(
             if (hasInvalidField) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "Quantity, unit cost, and fixed cost must be numbers",
+                    text = "Quantity, unit cost, and fixed cost must be finite numbers",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -507,3 +509,8 @@ private fun LotEditorSheet(
         }
     }
 }
+
+// parseFinite accepts only finite numeric input: NaN, Infinity, and overflowed
+// literals like 1e309 all parse as non-finite doubles and must not reach the
+// JSON serializer, which cannot represent them.
+private fun parseFinite(text: String): Double? = text.trim().toDoubleOrNull()?.takeIf { it.isFinite() }

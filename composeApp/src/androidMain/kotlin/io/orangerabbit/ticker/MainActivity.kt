@@ -56,6 +56,7 @@ private fun TickerApp(repository: ConfigRepository, viewModel: HomeViewModel) {
     val configError by repository.configError.collectAsState()
     val pollState by viewModel.state.collectAsState()
     val selectedGroup by viewModel.selectedGroup.collectAsState()
+    val saveError by viewModel.saveError.collectAsState()
     val scope = rememberCoroutineScope()
     var actionError by remember { mutableStateOf<String?>(null) }
 
@@ -87,7 +88,7 @@ private fun TickerApp(repository: ConfigRepository, viewModel: HomeViewModel) {
     GroupTabsScreen(
         config = config,
         pollState = pollState,
-        error = actionError ?: configError,
+        error = actionError ?: saveError ?: configError,
         selectedGroup = selectedGroup,
         onImportRequested = configImport.openImportPicker,
         onExportRequested = configImport.openExportPicker,
