@@ -13,9 +13,9 @@ An Android port of [achannarasappa/ticker](https://github.com/achannarasappa/tic
 
 ## Usage
 
-**Start from scratch** (the normal path): tap **Symbols** and add a watchlist symbol — the configuration is created on the spot and live quotes start immediately. **Edit lots** adds cost-basis entries (quantity, unit cost, fixed fees; multiple lots per symbol). **Settings** manages refresh interval, sort order, display flags, and groups. No file needed.
+**Start from scratch** (the normal path): tap **Symbols** and search by name or ticker across Yahoo and Coinbase — or add an exact symbol (e.g. futures tickers) — the configuration is created on the spot and live quotes start immediately. **Edit lots** opens your existing lots; tap one to edit, or **Add lot** to create one (quantity, unit cost, fixed fees; multiple lots per symbol). **Settings** manages theme, refresh interval, sort order, display flags, and groups. No file needed.
 
-**Or import**: if you already run the terminal `ticker`, tap **Import** and pick your `.ticker.yaml` — watchlist, lots, and groups carry over unchanged. **Export** writes your current configuration back out.
+**Or import**: if you already run the terminal `ticker`, tap **Import** and pick your `.ticker.yaml` — watchlist, lots, and groups carry over unchanged. Symbols are normalized to uppercase on load (the CLI accepts any case); **Export** writes the normalized form back out.
 
 ## Building
 

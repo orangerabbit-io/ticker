@@ -252,11 +252,11 @@ class QuotePoller(
     // identity counts as present only when its source-native symbol returned a quote),
     // plus symbols that could not be resolved to a source at all.
     private fun missingSymbols(resolved: ResolvedGroup): List<String> {
-        val presentYahoo = yahooQuotes.mapTo(HashSet()) { it.symbol }
-        val presentCoinbase = coinbaseQuotes.mapTo(HashSet()) { it.meta.symbolInSourceApi }
+        val presentYahoo = yahooQuotes.mapTo(HashSet()) { it.symbol.lowercase() }
+        val presentCoinbase = coinbaseQuotes.mapTo(HashSet()) { it.meta.symbolInSourceApi.lowercase() }
 
-        return resolved.tickerByYahooSymbol.filterKeys { it !in presentYahoo }.values.flatten() +
-            resolved.tickerByCoinbaseProduct.filterKeys { it !in presentCoinbase }.values.flatten() +
+        return resolved.tickerByYahooSymbol.filterKeys { it.lowercase() !in presentYahoo }.values.flatten() +
+            resolved.tickerByCoinbaseProduct.filterKeys { it.lowercase() !in presentCoinbase }.values.flatten() +
             resolved.unresolved
     }
 

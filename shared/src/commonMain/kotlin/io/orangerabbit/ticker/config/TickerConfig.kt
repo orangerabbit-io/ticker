@@ -34,6 +34,37 @@ data class TickerConfig(
 // normalizes the config.
 const val defaultGroupName = "default"
 
+// normalizeSymbol is the canonical symbol form — trimmed and uppercased — so every parse
+// and add path stores one spelling and duplicates can be detected regardless of case.
+fun normalizeSymbol(raw: String): String = raw.trim().uppercase()
+
+// Lot.normalized normalizes the lot's symbol like every other add path — the poller and
+// the cost-basis join match symbols exactly, so a lowercase lot symbol would never
+// resolve. Callers normalize at the mutation boundary; the editor passes trimmed input.
+fun Lot.normalized(): Lot = copy(symbol = normalizeSymbol(symbol))
+
+// normalized uppercases every watchlist entry and lot symbol, at the top level and in
+// every group, and preserves everything else (group names, costs, flags) untouched.
+fun TickerConfig.normalized(): TickerConfig =
+    copy(
+        watchlist = watchlist.map(::normalizeSymbol),
+        lots = lots.map { it.normalized() },
+        groups = groups.map { group ->
+            group.copy(
+                watchlist = group.watchlist.map(::normalizeSymbol),
+                lots = group.lots.map { it.normalized() },
+            )
+        },
+    )
+
+// withSymbolAdded normalizes symbol and appends it unless it is blank or the list
+// already holds that symbol case-insensitively, keeping one entry per symbol.
+fun List<String>.withSymbolAdded(symbol: String): List<String> {
+    val normalized = normalizeSymbol(symbol)
+    if (normalized.isEmpty() || any { it.equals(normalized, ignoreCase = true) }) return this
+    return this + normalized
+}
+
 // foldDefaultGroup merges a stored "default" group's entries into the promoted
 // top-level entries — promoted entries keep their order first, watchlist duplicates
 // are dropped case-insensitively, lots are appended — so promotion never produces two

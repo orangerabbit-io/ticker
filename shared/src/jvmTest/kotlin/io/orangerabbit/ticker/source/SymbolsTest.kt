@@ -47,6 +47,27 @@ class SymbolsTest {
     }
 
     @Test
+    fun `reverse map inverts source symbols keeping the first row`() {
+        val reverse = reverseSymbolMap(
+            parseSymbolsCsv("BTC.X,BTC-USD,cb\nBTC2.X,BTC-USD,cb\nSOL.X,SOL-USD,cb\n"),
+        )
+
+        assertEquals("BTC.X", reverse["BTC-USD"])
+        assertEquals("SOL.X", reverse["SOL-USD"])
+        assertEquals(listOf("BTC-USD", "SOL-USD"), reverse.keys.toList())
+        assertEquals(2, reverse.size)
+    }
+
+    @Test
+    fun `reverse map of the fixture inverts coinbase rows`() {
+        val reverse = reverseSymbolMap(symbolMap())
+
+        assertEquals("ACH.X", reverse["ACH-USD"])
+        assertEquals("DUP.X", reverse["FIRST-USD"])
+        assertEquals("10SET.X", reverse[""])
+    }
+
+    @Test
     fun `routes plain symbols to yahoo`() {
         val resolved = resolveGroup(
             ConfigGroup(name = "g", watchlist = listOf("AAPL", "BTC-USD")),

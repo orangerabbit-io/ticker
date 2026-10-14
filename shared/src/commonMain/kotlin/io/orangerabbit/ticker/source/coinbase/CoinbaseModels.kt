@@ -17,6 +17,21 @@ import kotlinx.serialization.json.Json
 @Serializable
 data class Response(
     val products: List<ResponseProduct> = emptyList(),
+    @SerialName("pagination") val pagination: ResponsePagination? = null,
+)
+
+@Serializable
+data class ResponsePagination(
+    @SerialName("next_cursor") val nextCursor: String = "",
+    @SerialName("has_next") val hasNext: Boolean = false,
+)
+
+// ProductCatalogEntry is the catalog projection of a market product: identity fields
+// only, used to enumerate tradeable products.
+data class ProductCatalogEntry(
+    val productId: String,
+    val baseName: String,
+    val baseDisplaySymbol: String,
 )
 
 @Serializable

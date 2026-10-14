@@ -3,6 +3,7 @@ package io.orangerabbit.ticker
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -15,8 +16,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import io.orangerabbit.ticker.ui.GroupTabsScreen
 import io.orangerabbit.ticker.ui.HomeViewModel
+import io.orangerabbit.ticker.ui.ThemeMode
+import io.orangerabbit.ticker.ui.ThemeSettings
 import io.orangerabbit.ticker.ui.TickerTheme
 import io.orangerabbit.ticker.ui.rememberConfigImport
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -25,6 +29,7 @@ class MainActivity : ComponentActivity(), KoinComponent {
 
     private val repository: ConfigRepository by inject()
     private val viewModel: HomeViewModel by inject()
+    private val themeSettings: ThemeSettings by inject()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,8 +45,23 @@ class MainActivity : ComponentActivity(), KoinComponent {
             }
         })
         setContent {
-            TickerTheme {
-                TickerApp(repository = repository, viewModel = viewModel)
+            // The persisted ThemeMode resolves to TickerTheme's darkTheme flag here so
+            // every color in the tree follows the setting (never system-dark detection
+            // inside call sites).
+            val mode by themeSettings.mode.collectAsState()
+            TickerTheme(
+                darkTheme = when (mode) {
+                    ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                    ThemeMode.LIGHT -> false
+                    ThemeMode.DARK -> true
+                },
+            ) {
+                TickerApp(
+                    repository = repository,
+                    viewModel = viewModel,
+                    themeMode = mode,
+                    onThemeModeChanged = themeSettings::set,
+                )
             }
         }
     }
@@ -49,13 +69,22 @@ class MainActivity : ComponentActivity(), KoinComponent {
 
 // TickerApp wires the SAF pickers, the config repository, and the home view model into
 // the group tabs screen. The quote poller runs while this composition is active and
-// while the activity is started.
+// while the activity is started. The current ThemeMode and its persist callback pass
+// through to the settings sheet (theme is presentation state, never part of the
+// Save-button batch); the persist runs here so a failed write surfaces through the
+// action-error channel like every other action instead of escaping the coroutine.
 @Composable
-private fun TickerApp(repository: ConfigRepository, viewModel: HomeViewModel) {
+private fun TickerApp(
+    repository: ConfigRepository,
+    viewModel: HomeViewModel,
+    themeMode: ThemeMode,
+    onThemeModeChanged: suspend (ThemeMode) -> Unit,
+) {
     val config by repository.config.collectAsState()
     val configError by repository.configError.collectAsState()
     val pollState by viewModel.state.collectAsState()
     val selectedGroup by viewModel.selectedGroup.collectAsState()
+    val searchState by viewModel.searchState.collectAsState()
     val saveError by viewModel.saveError.collectAsState()
     val scope = rememberCoroutineScope()
     var actionError by remember { mutableStateOf<String?>(null) }
@@ -90,12 +119,26 @@ private fun TickerApp(repository: ConfigRepository, viewModel: HomeViewModel) {
         pollState = pollState,
         error = actionError ?: saveError ?: configError,
         selectedGroup = selectedGroup,
+        searchState = searchState,
+        themeMode = themeMode,
+        onThemeModeChanged = { newMode ->
+            scope.launch {
+                try {
+                    onThemeModeChanged(newMode)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    actionError = "failed to save theme"
+                }
+            }
+        },
         onImportRequested = configImport.openImportPicker,
         onExportRequested = configImport.openExportPicker,
         onGroupSelected = viewModel::selectGroup,
         onRefresh = viewModel::refresh,
         onAddSymbol = viewModel::addSymbol,
         onRemoveSymbol = viewModel::removeSymbol,
+        onSearchQueryChanged = viewModel::onSearchQueryChanged,
         onAddLot = viewModel::addLot,
         onUpdateLot = viewModel::updateLot,
         onDeleteLot = viewModel::deleteLot,
