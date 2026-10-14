@@ -212,21 +212,21 @@ fun GroupTabsScreen(
                     )
                 }
             }
-            // editing actions stay reachable in both the empty-config state and the
-            // grouped state; adding to an empty config creates the default group
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                OutlinedButton(onClick = { showSymbolsSheet = true }) {
-                    Text("Symbols")
-                }
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = { showLotSheet = true }) {
-                    Text("Edit lots")
-                }
+        }
+        // editing actions stay reachable in every state: on a fresh install the first
+        // symbol or lot creates and persists the configuration — no import required
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            OutlinedButton(onClick = { showSymbolsSheet = true }) {
+                Text("Symbols")
+            }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { showLotSheet = true }) {
+                Text("Edit lots")
             }
         }
     }
@@ -373,9 +373,12 @@ private fun NoConfigImported(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text(text = "No config imported", style = MaterialTheme.typography.titleMedium)
+        Text(text = "No config yet", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(12.dp))
-        Text(text = "Import a .ticker.yaml file to get started.", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            text = "Add a symbol below to start fresh, or import an existing .ticker.yaml.",
+            style = MaterialTheme.typography.bodyMedium,
+        )
         Spacer(Modifier.height(16.dp))
         OutlinedButton(onClick = onImportRequested) {
             Text("Import")

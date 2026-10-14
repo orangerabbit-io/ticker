@@ -236,10 +236,15 @@ class HomeViewModel(
     private fun mutate(edit: (GroupEditState) -> GroupEditState) {
         scope.launch {
             mutationMutex.withLock {
-                val config = configRepo.current() ?: return@withLock
+                // a fresh install edits a not-yet-saved default config: the first real
+                // edit (a symbol or a lot) materializes and persists the configuration
+                // so the app is usable without importing a .ticker.yaml first
+                val stored = configRepo.current()
+                val config = stored ?: TickerConfig()
                 val updated = edit(GroupEditState(config, lineage))
                 if (updated.config == config) {
-                    // no-op edits do not save, avoiding a needless poller restart
+                    // no-op edits do not save (and do not materialize an empty config
+                    // on a fresh install), avoiding a needless poller restart
                     lineage = updated.lineage
                 } else if (write(updated.config)) {
                     // lineage commits only with a persisted save: on a failed write the
