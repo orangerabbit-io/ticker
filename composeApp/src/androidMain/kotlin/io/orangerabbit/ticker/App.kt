@@ -14,12 +14,14 @@ import io.orangerabbit.ticker.source.yahoo.YahooClient
 import io.orangerabbit.ticker.source.yahoo.YahooQuoteSource
 import io.orangerabbit.ticker.source.yahoo.YahooSessionStore
 import io.orangerabbit.ticker.ui.HomeViewModel
+import io.orangerabbit.ticker.ui.ThemeSettings
 import org.koin.core.context.startKoin
 import org.koin.dsl.bind
 import org.koin.dsl.module
 
 // appModule wires the app graph: quote sources over the OkHttp engine, the symbol map
-// client, the foreground quote poller, and the DataStore-backed config repository.
+// client, the foreground quote poller, the DataStore-backed config repository, and the
+// DataStore-backed theme settings.
 val appModule = module {
     // DataStoreSessionStore: the Yahoo handshake session (cookies + crumb) persists in
     // DataStore with a 24h TTL and survives process death; stale entries are ignored
@@ -43,6 +45,9 @@ val appModule = module {
     single { SymbolSearch(get(), get(), get()) }
     single { QuotePoller(get(), get(), get()) }
     single<ConfigRepository> { ConfigRepositoryImpl(get()) }
+    // SettingsStore persists the ThemeMode preference in its own "settings" DataStore,
+    // kept apart from the config so theme choice never reaches exported YAML.
+    single<ThemeSettings> { SettingsStore(get()) }
     single { HomeViewModel(get(), get(), get()) }
 }
 

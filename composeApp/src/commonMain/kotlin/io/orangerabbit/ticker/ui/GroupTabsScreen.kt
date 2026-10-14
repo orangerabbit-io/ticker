@@ -99,6 +99,7 @@ fun GroupTabsScreen(
     error: String?,
     selectedGroup: Int,
     searchState: SearchState?,
+    themeMode: ThemeMode,
     onImportRequested: () -> Unit,
     onExportRequested: () -> Unit,
     onGroupSelected: (Int) -> Unit,
@@ -110,6 +111,7 @@ fun GroupTabsScreen(
     onUpdateLot: (Int, Lot) -> Unit,
     onDeleteLot: (Int) -> Unit,
     onUpdateSettings: (SettingsUpdate) -> Unit,
+    onThemeModeChanged: (ThemeMode) -> Unit,
     onAddGroup: (String) -> Unit,
     onRenameGroup: (Int, String) -> Unit,
     onRemoveGroup: (Int) -> Unit,
@@ -286,6 +288,8 @@ fun GroupTabsScreen(
         SettingsSheet(
             config = config,
             groups = groups,
+            themeMode = themeMode,
+            onThemeModeChanged = onThemeModeChanged,
             onSave = {
                 showSettingsSheet = false
                 onUpdateSettings(it)
@@ -596,14 +600,18 @@ private val SearchResultSource.label: String
     }
 
 // SettingsSheet is the single in-app configuration surface the spec's config lifecycle
-// requires: refresh interval, sort mode, display flags, and group management
-// (add/rename/remove). Settings apply on Save as one write; group edits apply through
-// their own buttons. Symbol and lot edits live in the Symbols and Edit lots sheets.
+// requires: theme mode, refresh interval, sort mode, display flags, and group
+// management (add/rename/remove). Settings apply on Save as one write; group edits
+// apply through their own buttons. Theme mode applies immediately on tap (presentation
+// state, never part of the SettingsUpdate batch). Symbol and lot edits live in the
+// Symbols and Edit lots sheets.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsSheet(
     config: TickerConfig,
     groups: List<ConfigGroup>,
+    themeMode: ThemeMode,
+    onThemeModeChanged: (ThemeMode) -> Unit,
     onSave: (SettingsUpdate) -> Unit,
     onAddGroup: (String) -> Unit,
     onRenameGroup: (Int, String) -> Unit,
@@ -659,10 +667,24 @@ private fun SettingsSheet(
             Text(text = "Sort", style = MaterialTheme.typography.labelMedium)
             Spacer(Modifier.height(4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SortOption(label = "Change", selected = sort == null) { sort = null }
-                SortOption(label = "Alpha", selected = sort == "alpha") { sort = "alpha" }
-                SortOption(label = "Value", selected = sort == "value") { sort = "value" }
-                SortOption(label = "User", selected = sort == "user") { sort = "user" }
+                OptionChip(label = "Change", selected = sort == null) { sort = null }
+                OptionChip(label = "Alpha", selected = sort == "alpha") { sort = "alpha" }
+                OptionChip(label = "Value", selected = sort == "value") { sort = "value" }
+                OptionChip(label = "User", selected = sort == "user") { sort = "user" }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(text = "Theme", style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OptionChip(label = "System", selected = themeMode == ThemeMode.SYSTEM) {
+                    onThemeModeChanged(ThemeMode.SYSTEM)
+                }
+                OptionChip(label = "Light", selected = themeMode == ThemeMode.LIGHT) {
+                    onThemeModeChanged(ThemeMode.LIGHT)
+                }
+                OptionChip(label = "Dark", selected = themeMode == ThemeMode.DARK) {
+                    onThemeModeChanged(ThemeMode.DARK)
+                }
             }
             Spacer(Modifier.height(8.dp))
             FlagRow(label = "Show tags", checked = showTags) { showTags = it }
@@ -727,8 +749,9 @@ private fun SettingsSheet(
     }
 }
 
+// OptionChip is the single-select chip shared by the sort-mode and theme pickers.
 @Composable
-private fun SortOption(label: String, selected: Boolean, onSelect: () -> Unit) {
+private fun OptionChip(label: String, selected: Boolean, onSelect: () -> Unit) {
     FilterChip(
         selected = selected,
         onClick = onSelect,
