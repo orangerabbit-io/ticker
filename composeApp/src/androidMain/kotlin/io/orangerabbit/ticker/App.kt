@@ -24,8 +24,11 @@ val appModule = module {
     // store with a 24h TTL is the upgrade path.
     single<YahooSessionStore> { InMemorySessionStore() }
     // No HttpCookies plugin and OkHttp's default no-cookies jar: YahooClient performs
-    // its own handshake and must not get automatic cookie storage.
-    single { HttpClient(OkHttp) }
+    // its own handshake and must not get automatic cookie storage. Automatic redirect
+    // following is disabled on the shared client so no consumer (Coinbase, SymbolsClient)
+    // can be redirected to a destination outside the spec's allowlist; YahooClient
+    // follows and validates its own redirects against that allowlist.
+    single { HttpClient(OkHttp) { followRedirects = false } }
     single<YahooQuoteSource> { YahooClient(get(), get()) }
     single<CoinbaseQuoteSource> { CoinbaseClient(get()) }
     single { SymbolsClient(get()) }
