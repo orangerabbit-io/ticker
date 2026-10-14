@@ -4,6 +4,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -56,12 +60,17 @@ class MainActivity : ComponentActivity(), KoinComponent {
                     ThemeMode.DARK -> true
                 },
             ) {
-                TickerApp(
-                    repository = repository,
-                    viewModel = viewModel,
-                    themeMode = mode,
-                    onThemeModeChanged = themeSettings::set,
-                )
+                // Root Surface: paints colorScheme.background over the activity window
+                // (the platform theme's windowBackground is dark-first and does not
+                // follow ThemeMode on its own).
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    TickerApp(
+                        repository = repository,
+                        viewModel = viewModel,
+                        themeMode = mode,
+                        onThemeModeChanged = themeSettings::set,
+                    )
+                }
             }
         }
     }
