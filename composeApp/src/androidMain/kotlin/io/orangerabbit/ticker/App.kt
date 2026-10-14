@@ -12,6 +12,7 @@ import io.orangerabbit.ticker.source.yahoo.InMemorySessionStore
 import io.orangerabbit.ticker.source.yahoo.YahooClient
 import io.orangerabbit.ticker.source.yahoo.YahooQuoteSource
 import io.orangerabbit.ticker.source.yahoo.YahooSessionStore
+import io.orangerabbit.ticker.ui.HomeViewModel
 import org.koin.core.context.startKoin
 import org.koin.dsl.module
 
@@ -30,6 +31,7 @@ val appModule = module {
     single { SymbolsClient(get()) }
     single { QuotePoller(get(), get(), get()) }
     single<ConfigRepository> { ConfigRepositoryImpl(get()) }
+    single { HomeViewModel(get(), get()) }
 }
 
 // App starts Koin with appModule plus a Context binding for ConfigRepositoryImpl
