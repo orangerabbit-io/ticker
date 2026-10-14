@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 // HomeViewModel drives the home screen: it observes the imported config and keeps the
 // quote poller running for the selected group while the app is in the foreground, and
@@ -122,7 +123,7 @@ class HomeViewModel(
     // there is no lifecycle ownership, so the action is not started at all.
     private fun launchForeground(block: suspend CoroutineScope.() -> Unit) {
         val owner = foreground ?: return
-        scope.launch(owner) { block() }
+        scope.launch { withContext(owner) { block() } }
     }
 
     // addSymbol adds to the group selected when the user acts: a promoted top-level
