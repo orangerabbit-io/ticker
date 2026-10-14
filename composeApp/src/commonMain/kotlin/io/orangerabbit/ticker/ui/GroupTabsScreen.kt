@@ -41,6 +41,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -121,9 +122,12 @@ fun GroupTabsScreen(
     // the selected group is the tab/pager selection and the target of the editing
     // sheets; an empty config edits the (not yet created) default group at index 0
     val selected = if (groups.isEmpty()) 0 else selectedGroup.coerceIn(0, groups.lastIndex)
-    var showSymbolsSheet by remember { mutableStateOf(false) }
-    var showLotSheet by remember { mutableStateOf(false) }
-    var showSettingsSheet by remember { mutableStateOf(false) }
+    // rememberSaveable keeps an open sheet open across activity recreation (its
+    // onDismiss still runs when the user closes it) instead of silently dropping it
+    // while the singleton view model's search state survives
+    var showSymbolsSheet by rememberSaveable { mutableStateOf(false) }
+    var showLotSheet by rememberSaveable { mutableStateOf(false) }
+    var showSettingsSheet by rememberSaveable { mutableStateOf(false) }
 
     // safeDrawingPadding keeps the header clear of status bars and cutouts and the
     // bottom actions clear of the navigation bar under Android 15's enforced
