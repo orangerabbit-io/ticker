@@ -9,12 +9,16 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CoinbaseClientTest {
@@ -126,5 +130,83 @@ class CoinbaseClientTest {
             assertFalse(cause.message.orEmpty().contains("secret-peer"), "transport message leaked in cause <$cause>")
             cause = cause.cause
         }
+    }
+
+    // catalog pages are replayed per request: page 2 is served once the cursor is passed
+    private fun catalogClient(recorded: MutableList<HttpRequestData>): HttpClient =
+        HttpClient(MockEngine { request ->
+            recorded += request
+            if (request.url.parameters["cursor"] == "c2Vjb25k") {
+                respond(fixture("catalog-page-2.json"), HttpStatusCode.OK)
+            } else {
+                respond(fixture("catalog-page-1.json"), HttpStatusCode.OK)
+            }
+        })
+
+    @Test
+    fun `listProducts concatenates pages in order passing the cursor`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val client = CoinbaseClient(catalogClient(recorded))
+
+        val entries = client.listProducts().getOrThrow()
+
+        assertEquals(
+            listOf(
+                ProductCatalogEntry("BTC-USD", "Bitcoin", "BTC"),
+                ProductCatalogEntry("ETH-USD", "Ethereum", "ETH"),
+            ),
+            entries,
+        )
+        assertEquals(2, recorded.size)
+        assertEquals("250", recorded[0].url.parameters["limit"])
+        assertNull(recorded[0].url.parameters["cursor"])
+        assertEquals("c2Vjb25k", recorded[1].url.parameters["cursor"])
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun `listProducts caches the catalog within the 24h ttl`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val client = CoinbaseClient(catalogClient(recorded), clock = { testScheduler.currentTime })
+
+        client.listProducts().getOrThrow()
+        advanceTimeBy(60 * 60 * 1000L)
+        runCurrent()
+        client.listProducts().getOrThrow()
+
+        assertEquals(2, recorded.size)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun `listProducts refetches after the 24h ttl expires`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val client = CoinbaseClient(catalogClient(recorded), clock = { testScheduler.currentTime })
+
+        client.listProducts().getOrThrow()
+        advanceTimeBy(25 * 60 * 60 * 1000L)
+        runCurrent()
+        client.listProducts().getOrThrow()
+
+        assertEquals(4, recorded.size)
+    }
+
+    @Test
+    fun `listProducts non-200 fails with sanitized message without caching`() = runTest {
+        var requests = 0
+        val http = HttpClient(MockEngine {
+            requests++
+            respond("upstream boom", HttpStatusCode.BadGateway)
+        })
+        val client = CoinbaseClient(http)
+
+        repeat(2) {
+            val message = assertNotNull(client.listProducts().exceptionOrNull()).message.orEmpty()
+            assertTrue(message.contains("failed to list products"), "was <$message>")
+            assertTrue(message.contains("502"), "expected status code in message but was <$message>")
+            assertFalse(message.contains("upstream boom"), "response body leaked in <$message>")
+        }
+
+        assertEquals(2, requests)
     }
 }
