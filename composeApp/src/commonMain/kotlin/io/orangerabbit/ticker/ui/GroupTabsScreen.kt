@@ -174,6 +174,7 @@ fun GroupTabsScreen(
 // QuoteList shows the poller's assets in order (the poller applies config.sort), with
 // optional row separators, the positions section, and a subtle footer for unavailable
 // symbols. Pull-to-refresh triggers an immediate poller refresh.
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QuoteList(
     config: TickerConfig,
