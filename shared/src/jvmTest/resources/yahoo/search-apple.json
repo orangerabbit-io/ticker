@@ -1,0 +1,6 @@
+{
+  "quotes": [
+    {"exchange":"NMS","shortname":"Apple Inc.","quoteType":"EQUITY","symbol":"AAPL","index":"quotes","score":453307.0,"typeDisp":"Equity","longname":"Apple Inc.","exchDisp":"NASDAQ","sector":"Technology","industry":"Consumer Electronics","dispSecIndFlag":true,"isYahooFinance":true},
+    {"exchange":"CCC","shortname":"Bitcoin USD","quoteType":"CRYPTOCURRENCY","symbol":"BTC-USD","index":"quotes","score":368856.0,"typeDisp":"Cryptocurrency","longname":"Bitcoin USD","exchDisp":"CCC","isYahooFinance":true}
+  ]
+}
