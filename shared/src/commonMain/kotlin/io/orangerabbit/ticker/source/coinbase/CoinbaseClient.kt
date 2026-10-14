@@ -71,7 +71,11 @@ class CoinbaseClient(
             }
             cursor = pagination.nextCursor
         }
-        return products.map { ProductCatalogEntry(it.productId, it.baseName, it.baseDisplaySymbol) }
+        // futures products are excluded from the catalog: the quote pipeline refuses
+        // them (transformProduct), so proposing them would add rows that never quote
+        return products
+            .filter { it.productType != "FUTURE" }
+            .map { ProductCatalogEntry(it.productId, it.baseName, it.baseDisplaySymbol) }
     }
 
     override suspend fun getQuotes(productIds: List<String>): Result<List<AssetQuote>> {

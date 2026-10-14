@@ -165,6 +165,37 @@ class CoinbaseClientTest {
 
     @Test
     @OptIn(ExperimentalCoroutinesApi::class)
+    fun `listProducts excludes FUTURE products while pagination and caching still work`() = runTest {
+        val recorded = mutableListOf<HttpRequestData>()
+        val futurePage1 = """{"products":[{"product_id":"BTC-USD","base_name":"Bitcoin","base_display_symbol":"BTC","product_type":"SPOT","status":"online"},{"product_id":"BTC-260327","base_name":"Bitcoin Futures","base_display_symbol":"BTCF","product_type":"FUTURE","status":"online"}],"pagination":{"next_cursor":"c2Vjb25k","has_next":true}}"""
+        val futurePage2 = """{"products":[{"product_id":"ETH-USD","base_name":"Ethereum","base_display_symbol":"ETH","product_type":"SPOT","status":"online"}],"pagination":{"next_cursor":"","has_next":false}}"""
+        val http = HttpClient(MockEngine { request ->
+            recorded += request
+            if (request.url.parameters["cursor"] == "c2Vjb25k") {
+                respond(futurePage2, HttpStatusCode.OK)
+            } else {
+                respond(futurePage1, HttpStatusCode.OK)
+            }
+        })
+        val client = CoinbaseClient(http, clock = { testScheduler.currentTime })
+
+        val entries = client.listProducts().getOrThrow()
+
+        assertEquals(
+            listOf(
+                ProductCatalogEntry("BTC-USD", "Bitcoin", "BTC"),
+                ProductCatalogEntry("ETH-USD", "Ethereum", "ETH"),
+            ),
+            entries,
+        )
+        assertEquals(2, recorded.size)
+
+        assertEquals(entries, client.listProducts().getOrThrow())
+        assertEquals(2, recorded.size)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun `listProducts caches the catalog within the 24h ttl`() = runTest {
         val recorded = mutableListOf<HttpRequestData>()
         val client = CoinbaseClient(catalogClient(recorded), clock = { testScheduler.currentTime })
