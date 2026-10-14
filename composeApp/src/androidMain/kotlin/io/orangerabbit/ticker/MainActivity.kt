@@ -69,7 +69,11 @@ private fun TickerApp(repository: ConfigRepository, viewModel: HomeViewModel) {
         onImported = { uriString, yaml ->
             scope.launch {
                 repository.import(uriString, yaml).fold(
-                    onSuccess = { actionError = null },
+                    onSuccess = {
+                        actionError = null
+                        // a replaced configuration starts new group identities
+                        viewModel.onConfigReplaced()
+                    },
                     onFailure = { actionError = it.message ?: "import failed" },
                 )
             }

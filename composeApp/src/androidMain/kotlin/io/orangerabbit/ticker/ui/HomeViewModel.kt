@@ -2,15 +2,17 @@ package io.orangerabbit.ticker.ui
 
 import io.orangerabbit.ticker.ConfigRepository
 import io.orangerabbit.ticker.config.ConfigGroup
+import io.orangerabbit.ticker.config.GroupEditState
+import io.orangerabbit.ticker.config.GroupLineage
 import io.orangerabbit.ticker.config.GroupTarget
 import io.orangerabbit.ticker.config.Lot
 import io.orangerabbit.ticker.config.TickerConfig
-import io.orangerabbit.ticker.config.addGroup as addGroupEdit
+import io.orangerabbit.ticker.config.addGroup
 import io.orangerabbit.ticker.config.defaultGroupName
 import io.orangerabbit.ticker.config.editGroup
-import io.orangerabbit.ticker.config.groupTarget
-import io.orangerabbit.ticker.config.removeGroup as removeGroupEdit
-import io.orangerabbit.ticker.config.renameGroup as renameGroupEdit
+import io.orangerabbit.ticker.config.removeGroup
+import io.orangerabbit.ticker.config.renameGroup
+import io.orangerabbit.ticker.config.target
 import io.orangerabbit.ticker.poll.PollState
 import io.orangerabbit.ticker.poll.QuotePoller
 import kotlinx.coroutines.CancellationException
@@ -146,15 +148,17 @@ class HomeViewModel(
     // flags as a single write.
     fun updateSettings(settings: SettingsUpdate) {
         if (settings.interval < 0) return
-        mutate { config ->
-            config.copy(
-                interval = settings.interval,
-                sort = settings.sort,
-                showTags = settings.showTags,
-                showFundamentals = settings.showFundamentals,
-                showSeparator = settings.showSeparator,
-                showSummary = settings.showSummary,
-                showPositions = settings.showPositions,
+        mutate { state ->
+            state.copy(
+                config = state.config.copy(
+                    interval = settings.interval,
+                    sort = settings.sort,
+                    showTags = settings.showTags,
+                    showFundamentals = settings.showFundamentals,
+                    showSeparator = settings.showSeparator,
+                    showSummary = settings.showSummary,
+                    showPositions = settings.showPositions,
+                ),
             )
         }
     }
@@ -162,19 +166,19 @@ class HomeViewModel(
     fun addGroup(name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
-        mutate { config -> addGroupEdit(config, trimmed) }
+        mutate { state -> state.addGroup(trimmed) }
     }
 
     fun renameGroup(index: Int, name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
-        val target = targetAt(index)
-        mutate { config -> renameGroupEdit(config, target, trimmed) }
+        val groupTarget = targetAt(index)
+        mutate { state -> state.renameGroup(groupTarget, trimmed) }
     }
 
     fun removeGroup(index: Int) {
-        val target = targetAt(index)
-        mutate { config -> removeGroupEdit(config, target) }
+        val groupTarget = targetAt(index)
+        mutate { state -> state.removeGroup(groupTarget) }
     }
 
     // addLot always appends to the acted-on group: a symbol can carry several cost-basis
@@ -221,15 +225,33 @@ class HomeViewModel(
     // removed.
     private val mutationMutex = Mutex()
 
-    private fun mutate(edit: (TickerConfig) -> TickerConfig) {
+    // lineage threads the default group's materialization identity through queued
+    // mutations (see GroupEditState): captured targets keep identifying the same group
+    // across materialization, matched by token and never by name. It is reset when an
+    // import replaces the configuration wholesale.
+    private var lineage: GroupLineage = GroupLineage()
+
+    private fun mutate(edit: (GroupEditState) -> GroupEditState) {
         scope.launch {
             mutationMutex.withLock {
                 val config = configRepo.current() ?: return@withLock
-                val updated = edit(config)
+                val updated = edit(GroupEditState(config, lineage))
                 // no-op edits do not save, avoiding a needless poller restart
-                if (updated != config) {
-                    write(updated)
+                if (updated.config != config) {
+                    write(updated.config)
                 }
+                lineage = updated.lineage
+            }
+        }
+    }
+
+    // onConfigReplaced resets the default group's lineage when an import replaces the
+    // configuration: targets captured against the old config must not follow groups of
+    // the new one.
+    fun onConfigReplaced() {
+        scope.launch {
+            mutationMutex.withLock {
+                lineage = lineage.next()
             }
         }
     }
@@ -237,15 +259,13 @@ class HomeViewModel(
     // targetAt captures the identity of the group shown at a displayed index at action
     // time — before the mutation joins the queue — so a later config change (which
     // resets the selection) cannot retarget a queued action.
-    private fun targetAt(index: Int): GroupTarget {
-        val config = configRepo.config.value ?: return GroupTarget.NewDefault
-        return groupTarget(config, index.coerceAtLeast(0))
-    }
+    private fun targetAt(index: Int): GroupTarget =
+        GroupEditState(configRepo.config.value ?: TickerConfig(), lineage).target(index.coerceAtLeast(0))
 
     // editTarget queues a target-resolved group edit into the serialized mutation
     // stream; the shared transform reads the target's current contents under the mutex.
     private fun editTarget(target: GroupTarget, edit: (ConfigGroup) -> ConfigGroup) {
-        mutate { config -> editGroup(config, target, edit) }
+        mutate { state -> state.editGroup(target, edit) }
     }
 
     // lotAt captures the content of the lot shown at an index at action time: content is
@@ -258,7 +278,7 @@ class HomeViewModel(
 
     private fun groupAt(config: TickerConfig, target: GroupTarget): ConfigGroup? =
         when (target) {
-            GroupTarget.NewDefault, GroupTarget.PromotedDefault ->
+            is GroupTarget.Default ->
                 ConfigGroup(name = defaultGroupName, watchlist = config.watchlist, lots = config.lots)
             is GroupTarget.Named -> config.groups.firstOrNull { it.name == target.name }
         }

@@ -1,115 +1,182 @@
 package io.orangerabbit.ticker.config
 
-// GroupTarget identifies the group a config edit acts on. The promoted top-level
-// default group is tracked structurally (it has no stored name of its own); stored
-// groups are identified by name. Group names are unique (validation rejects
-// duplicates), so a name identifies exactly one group across queued edits. Identity
-// survives normalization: when a group edit materializes the promoted default into a
-// stored "default" group, PromotedDefault targets follow it there. A target that no
-// longer exists when its edit runs leaves the config unchanged — never a redirect onto
-// whichever group shifted into its place.
-sealed interface GroupTarget {
-    // the promoted top-level default group: the top-level watchlist/lots while the
-    // config uses the promoted shape
-    data object PromotedDefault : GroupTarget
+// GroupEditState pairs a config with the materialization lineage of its default group.
+// The lineage lives in this edit layer only — user-visible config data carries no
+// tokens — and is threaded through queued edits so a captured target keeps identifying
+// the same group through materialization. Identity is the materialization event, never
+// the group name.
+data class GroupEditState(
+    val config: TickerConfig,
+    val lineage: GroupLineage = GroupLineage(),
+)
 
-    // the default group of an empty config, created by its first edit
-    data object NewDefault : GroupTarget
+// GroupLineage identifies one default-group lineage. Targets captured against the
+// default group carry `token`; when a group edit materializes the promoted entries
+// into a stored group, that group is stamped with the same token and `materializedAs`
+// follows it through renames. A group without a matching token — parsed from YAML, or
+// created after the lineage died — is unrelated and never matches. `next()` starts a
+// fresh lineage, retiring this one.
+data class GroupLineage(
+    val token: String = mintLineageToken(),
+    val materializedAs: String? = null,
+) {
+    fun next(): GroupLineage = GroupLineage()
+}
+
+// lineage tokens only need to be unique within one process's edit layer, which runs
+// its edits serialized; a plain counter suffices
+private var lineageCounter = 0
+
+private fun mintLineageToken(): String = "lineage-${lineageCounter++}"
+
+// GroupTarget identifies the group an edit acts on. Default targets carry the lineage
+// token they were created with and are matched by token only; Named targets are
+// matched by name (group names are unique — validation rejects duplicates). A target
+// whose group is gone leaves the config unchanged — never a redirect onto whichever
+// group took its place.
+sealed interface GroupTarget {
+    // the default group of one lineage: the promoted top-level entries, the empty
+    // config's future default group, or the stored group that materialized from them
+    data class Default(val token: String) : GroupTarget
 
     // a stored group by name
     data class Named(val name: String) : GroupTarget
 }
 
-// groupTarget maps a displayed group index (default group first, per withDefaultGroup)
-// to the identity of the group shown there. The mapping happens at action time so
-// later config changes cannot retarget a queued edit.
-fun groupTarget(config: TickerConfig, index: Int): GroupTarget {
+// target maps a displayed group index (default group first, per withDefaultGroup) to
+// the identity of the group shown there. The mapping happens at action time so later
+// config changes cannot retarget a queued edit.
+fun GroupEditState.target(index: Int): GroupTarget {
     val displayed = config.withDefaultGroup().groups
     if (displayed.isEmpty()) {
-        return GroupTarget.NewDefault
+        return GroupTarget.Default(lineage.token)
     }
     val selected = index.coerceIn(0, displayed.lastIndex)
-    return if ((config.watchlist.isNotEmpty() || config.lots.isNotEmpty()) && selected == 0) {
-        GroupTarget.PromotedDefault
+    return if (promoted(config) && selected == 0) {
+        GroupTarget.Default(lineage.token)
     } else {
         GroupTarget.Named(displayed[selected].name)
     }
 }
 
-// addGroup appends a named group at the end of the displayed list. This materializes
-// the promoted default group into a stored "default" group (normalization). Duplicate
-// names are rejected so names stay unique.
-fun addGroup(config: TickerConfig, name: String): TickerConfig {
-    if (name.isBlank()) return config
+// addGroup appends a named group at the end of the displayed list, materializing the
+// promoted default group into a stored "default" group along the way (normalization).
+// Duplicate names are rejected so names stay unique.
+fun GroupEditState.addGroup(name: String): GroupEditState {
+    if (name.isBlank()) return this
     val displayed = config.withDefaultGroup().groups
-    if (displayed.any { it.name == name }) return config
-    return config.copy(
-        watchlist = emptyList(),
-        lots = emptyList(),
-        groups = displayed + ConfigGroup(name = name),
+    if (displayed.any { it.name == name }) return this
+    val materialized = config.watchlist.isNotEmpty() || config.lots.isNotEmpty()
+    return GroupEditState(
+        config = config.copy(
+            watchlist = emptyList(),
+            lots = emptyList(),
+            groups = displayed + ConfigGroup(name = name),
+        ),
+        lineage = if (materialized) lineage.copy(materializedAs = defaultGroupName) else lineage,
     )
 }
 
-// renameGroup renames the target: a named group in place; the promoted default group is
-// materialized under the new name at its displayed position. Duplicate names are
-// rejected; a target that is already gone leaves the config unchanged.
-fun renameGroup(config: TickerConfig, target: GroupTarget, name: String): TickerConfig {
-    if (name.isBlank()) return config
+// renameGroup renames the target: a named group in place; the default group of a live
+// lineage is materialized under the new name at its displayed position (or renamed
+// with it when already materialized). Duplicate names are rejected.
+fun GroupEditState.renameGroup(target: GroupTarget, name: String): GroupEditState {
+    if (name.isBlank()) return this
     val current = when (target) {
-        GroupTarget.PromotedDefault, GroupTarget.NewDefault -> defaultGroupName
+        is GroupTarget.Default -> lineage.materializedAs ?: defaultGroupName
         is GroupTarget.Named -> target.name
     }
     val taken = config.withDefaultGroup().groups.mapTo(HashSet()) { it.name }
     taken.remove(current)
-    if (name in taken) return config
+    if (name in taken) return this
 
     return when (target) {
-        GroupTarget.PromotedDefault, GroupTarget.NewDefault -> {
-            if (promoted(config)) {
-                config.copy(
+        is GroupTarget.Default -> when (val home = homeOf(target)) {
+            DefaultHome.TopLevel -> GroupEditState(
+                config = config.copy(
                     watchlist = emptyList(),
                     lots = emptyList(),
                     groups = listOf(ConfigGroup(name = name, watchlist = config.watchlist, lots = config.lots)) + config.groups,
-                )
+                ),
+                lineage = lineage.copy(materializedAs = name),
+            )
+            is DefaultHome.Materialized -> GroupEditState(
+                config = editStoredGroup(config, home.name) { group -> group.copy(name = name) },
+                lineage = lineage.copy(materializedAs = name),
+            )
+            DefaultHome.Retired -> this
+        }
+        is GroupTarget.Named -> {
+            if (config.groups.none { it.name == target.name }) {
+                this
             } else {
-                // a group edit materialized the promoted default into a stored
-                // "default" group — the target follows it there
-                editStoredGroup(config, defaultGroupName) { group -> group.copy(name = name) }
+                GroupEditState(
+                    config = editStoredGroup(config, target.name) { group -> group.copy(name = name) },
+                    lineage = if (target.name == lineage.materializedAs) lineage.copy(materializedAs = name) else lineage,
+                )
             }
         }
-        is GroupTarget.Named -> editStoredGroup(config, target.name) { group -> group.copy(name = name) }
     }
 }
 
-// removeGroup removes the target: the promoted default group's top-level entries, a
-// named group by name. A target that is already gone leaves the config unchanged.
-fun removeGroup(config: TickerConfig, target: GroupTarget): TickerConfig =
+// removeGroup removes the target: the default group's top-level entries or its
+// materialized stored group (retiring the lineage either way), a named group by name.
+fun GroupEditState.removeGroup(target: GroupTarget): GroupEditState =
     when (target) {
-        GroupTarget.PromotedDefault, GroupTarget.NewDefault ->
-            if (config.watchlist.isEmpty() && config.lots.isEmpty()) {
-                // materialized successor, or nothing left to remove
-                editStoredGroup(config, defaultGroupName) { null }
+        is GroupTarget.Default -> when (val home = homeOf(target)) {
+            DefaultHome.TopLevel -> GroupEditState(
+                config = config.copy(watchlist = emptyList(), lots = emptyList()),
+                lineage = if (config.watchlist.isEmpty() && config.lots.isEmpty()) lineage else lineage.next(),
+            )
+            is DefaultHome.Materialized -> GroupEditState(
+                config = editStoredGroup(config, home.name) { null },
+                lineage = lineage.next(),
+            )
+            DefaultHome.Retired -> this
+        }
+        is GroupTarget.Named -> {
+            if (config.groups.none { it.name == target.name }) {
+                this
             } else {
-                config.copy(watchlist = emptyList(), lots = emptyList())
+                GroupEditState(
+                    config = editStoredGroup(config, target.name) { null },
+                    lineage = if (target.name == lineage.materializedAs) lineage.next() else lineage,
+                )
             }
-        is GroupTarget.Named -> editStoredGroup(config, target.name) { null }
+        }
     }
 
-// editGroup applies edit to the CURRENT contents of the target: the promoted top-level
-// default group (or the empty config's new default group) writes back to the top-level
-// watchlist/lots, a named group to its own stored entry. A group edit that materialized
-// the promoted default into a stored "default" group keeps the target valid — queued
-// edits follow it there. A target that is truly gone leaves the config unchanged.
-fun editGroup(config: TickerConfig, target: GroupTarget, edit: (ConfigGroup) -> ConfigGroup): TickerConfig =
+// editGroup applies edit to the CURRENT contents of the target: the default group's
+// top-level entries (created on first edit of an empty config), or its materialized
+// stored group.
+fun GroupEditState.editGroup(target: GroupTarget, edit: (ConfigGroup) -> ConfigGroup): GroupEditState =
     when (target) {
-        GroupTarget.NewDefault -> withTopLevelDefault(config, edit)
-        GroupTarget.PromotedDefault ->
-            if (promoted(config)) {
-                withTopLevelDefault(config, edit)
-            } else {
-                editStoredGroup(config, defaultGroupName, edit)
-            }
-        is GroupTarget.Named -> editStoredGroup(config, target.name, edit)
+        is GroupTarget.Default -> when (val home = homeOf(target)) {
+            DefaultHome.TopLevel -> copy(config = withTopLevelDefault(config, edit))
+            is DefaultHome.Materialized -> copy(config = editStoredGroup(config, home.name, edit))
+            DefaultHome.Retired -> this
+        }
+        is GroupTarget.Named -> copy(config = editStoredGroup(config, target.name, edit))
+    }
+
+// DefaultHome is where a default-group target lives right now: the promoted top-level
+// entries, the materialized stored group carrying the lineage token, or nowhere (the
+// lineage is retired).
+private sealed interface DefaultHome {
+    data object TopLevel : DefaultHome
+    data class Materialized(val name: String) : DefaultHome
+    data object Retired : DefaultHome
+}
+
+// homeOf resolves where a default-group target lives by LINEAGE, never by name: only
+// the stored group stamped with the target's own materialization matches it. A group
+// without that token — parsed from YAML, or created after the lineage died — is
+// unrelated and never matches.
+private fun GroupEditState.homeOf(target: GroupTarget.Default): DefaultHome =
+    when {
+        target.token != lineage.token -> DefaultHome.Retired
+        lineage.materializedAs != null -> DefaultHome.Materialized(lineage.materializedAs)
+        else -> DefaultHome.TopLevel
     }
 
 // promoted reports whether the config still holds its default group as top-level
