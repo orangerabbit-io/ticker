@@ -95,8 +95,13 @@ private fun TickerApp(repository: ConfigRepository, viewModel: HomeViewModel) {
         onGroupSelected = viewModel::selectGroup,
         onRefresh = viewModel::refresh,
         onAddSymbol = viewModel::addSymbol,
+        onRemoveSymbol = viewModel::removeSymbol,
         onAddLot = viewModel::addLot,
         onUpdateLot = viewModel::updateLot,
         onDeleteLot = viewModel::deleteLot,
+        onUpdateSettings = viewModel::updateSettings,
+        onAddGroup = viewModel::addGroup,
+        onRenameGroup = viewModel::renameGroup,
+        onRemoveGroup = viewModel::removeGroup,
     )
 }

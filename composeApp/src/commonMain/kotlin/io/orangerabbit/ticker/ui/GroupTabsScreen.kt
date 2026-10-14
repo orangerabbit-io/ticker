@@ -17,7 +17,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -43,19 +45,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import io.orangerabbit.ticker.config.ConfigGroup
 import io.orangerabbit.ticker.config.Lot
 import io.orangerabbit.ticker.config.TickerConfig
 import io.orangerabbit.ticker.config.withDefaultGroup
 import io.orangerabbit.ticker.poll.PollState
 import kotlinx.coroutines.launch
 
+// SettingsUpdate carries the settings-sheet edits (interval, sort mode, display flags)
+// to the view model as one write; group edits use the dedicated callbacks.
+data class SettingsUpdate(
+    val interval: Int,
+    val sort: String?,
+    val showTags: Boolean,
+    val showFundamentals: Boolean,
+    val showSeparator: Boolean,
+    val showSummary: Boolean,
+    val showPositions: Boolean,
+)
+
 // GroupTabsScreen is the app's single screen: a tab row over the config's groups (with
 // the top-level watchlist/lots promoted to a "default" group via withDefaultGroup) with
 // a horizontally paged content area cycling the same groups, the selected group's quote
 // list with optional pinned summary bar and positions section, pull-to-refresh, and
-// add-symbol and lot-editor bottom sheets. The selected group comes from the view model
-// (selectedGroup) so tabs, pager, and poller stay in sync across recreation. With no
-// config imported it shows the SAF import prompt.
+// symbols, lot-editor, and settings bottom sheets. The selected group comes from the view
+// model (selectedGroup) so tabs, pager, and poller stay in sync across recreation. With
+// no config imported it shows the SAF import prompt.
 @Composable
 fun GroupTabsScreen(
     config: TickerConfig?,
@@ -67,14 +82,20 @@ fun GroupTabsScreen(
     onGroupSelected: (Int) -> Unit,
     onRefresh: () -> Unit,
     onAddSymbol: (String) -> Unit,
+    onRemoveSymbol: (String) -> Unit,
     onAddLot: (Lot) -> Unit,
     onUpdateLot: (Int, Lot) -> Unit,
     onDeleteLot: (Int) -> Unit,
+    onUpdateSettings: (SettingsUpdate) -> Unit,
+    onAddGroup: (String) -> Unit,
+    onRenameGroup: (Int, String) -> Unit,
+    onRemoveGroup: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val groups = config?.withDefaultGroup()?.groups.orEmpty()
-    var showAddSheet by remember { mutableStateOf(false) }
+    var showSymbolsSheet by remember { mutableStateOf(false) }
     var showLotSheet by remember { mutableStateOf(false) }
+    var showSettingsSheet by remember { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxSize()) {
         Row(
@@ -94,6 +115,10 @@ fun GroupTabsScreen(
                 OutlinedButton(onClick = onExportRequested) {
                     Text("Export")
                 }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = { showSettingsSheet = true }) {
+                    Text("Settings")
+                }
             }
         }
         if (error != null) {
@@ -104,17 +129,32 @@ fun GroupTabsScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             )
         }
-        when {
-            config == null -> NoConfigImported(
+        if (config == null) {
+            NoConfigImported(
                 onImportRequested = onImportRequested,
                 modifier = Modifier.weight(1f),
             )
-            groups.isEmpty() -> Text(
-                text = "No groups in configuration",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(16.dp),
-            )
-            else -> {
+        } else {
+            if (groups.isEmpty()) {
+                // an empty configuration is editable too: the sheets below create the
+                // default group with its first symbol or lot
+                Column(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        text = "No groups in configuration",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Add a symbol or lot to create the default group.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
                 val selected = selectedGroup.coerceIn(0, groups.lastIndex)
                 val pagerState = key(groups.size) {
                     rememberPagerState(initialPage = selected, pageCount = { groups.size })
@@ -165,31 +205,35 @@ fun GroupTabsScreen(
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    OutlinedButton(onClick = { showAddSheet = true }) {
-                        Text("Add symbol")
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = { showLotSheet = true }) {
-                        Text("Edit lots")
-                    }
+            }
+            // editing actions stay reachable in both the empty-config state and the
+            // grouped state; adding to an empty config creates the default group
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                OutlinedButton(onClick = { showSymbolsSheet = true }) {
+                    Text("Symbols")
+                }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = { showLotSheet = true }) {
+                    Text("Edit lots")
                 }
             }
         }
     }
 
-    if (showAddSheet) {
-        AddSymbolSheet(
+    if (showSymbolsSheet) {
+        SymbolsSheet(
+            symbols = defaultWatchlist(config),
             onAdd = {
-                showAddSheet = false
+                showSymbolsSheet = false
                 onAddSymbol(it)
             },
-            onDismiss = { showAddSheet = false },
+            onRemove = onRemoveSymbol,
+            onDismiss = { showSymbolsSheet = false },
         )
     }
     if (showLotSheet) {
@@ -208,6 +252,20 @@ fun GroupTabsScreen(
                 onDeleteLot(index)
             },
             onDismiss = { showLotSheet = false },
+        )
+    }
+    if (showSettingsSheet && config != null) {
+        SettingsSheet(
+            config = config,
+            groups = groups,
+            onSave = {
+                showSettingsSheet = false
+                onUpdateSettings(it)
+            },
+            onAddGroup = onAddGroup,
+            onRenameGroup = onRenameGroup,
+            onRemoveGroup = onRemoveGroup,
+            onDismiss = { showSettingsSheet = false },
         )
     }
 }
@@ -319,12 +377,28 @@ private fun NoConfigImported(
     }
 }
 
-// AddSymbolSheet appends a typed symbol to the default group's watchlist through the
-// config repository; the poller restarts when the saved config emits.
+// defaultWatchlist lists the default group's explicit watchlist entries — the ones
+// symbol removal can act on: the promoted top-level watchlist when present (or when
+// the config has no groups yet), otherwise the first stored group's. Lot-owned
+// symbols stay managed in the lot editor.
+private fun defaultWatchlist(config: TickerConfig?): List<String> {
+    if (config == null) return emptyList()
+    return if (config.watchlist.isNotEmpty() || config.lots.isNotEmpty() || config.groups.isEmpty()) {
+        config.watchlist
+    } else {
+        config.groups.first().watchlist
+    }
+}
+
+// SymbolsSheet adds a typed symbol to the default group's watchlist and removes
+// mistaken entries through the config repository; the poller restarts when the saved
+// config emits. The sheet stays open across removals so several can be done at once.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddSymbolSheet(
+private fun SymbolsSheet(
+    symbols: List<String>,
     onAdd: (String) -> Unit,
+    onRemove: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var symbol by remember { mutableStateOf("") }
@@ -333,9 +407,10 @@ private fun AddSymbolSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
-                .padding(bottom = 32.dp),
+                .padding(bottom = 32.dp)
+                .verticalScroll(rememberScrollState()),
         ) {
-            Text(text = "Add symbol", style = MaterialTheme.typography.titleMedium)
+            Text(text = "Symbols", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(
                 value = symbol,
@@ -352,6 +427,202 @@ private fun AddSymbolSheet(
             ) {
                 Text("Add")
             }
+            if (symbols.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Text(text = "Watchlist", style = MaterialTheme.typography.labelMedium)
+                symbols.forEach { entry ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = entry,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { onRemove(entry) }) {
+                            Text("Remove")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// SettingsSheet is the single in-app configuration surface the spec's config lifecycle
+// requires: refresh interval, sort mode, display flags, and group management
+// (add/rename/remove). Settings apply on Save as one write; group edits apply through
+// their own buttons. Symbol and lot edits live in the Symbols and Edit lots sheets.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsSheet(
+    config: TickerConfig,
+    groups: List<ConfigGroup>,
+    onSave: (SettingsUpdate) -> Unit,
+    onAddGroup: (String) -> Unit,
+    onRenameGroup: (Int, String) -> Unit,
+    onRemoveGroup: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var interval by remember { mutableStateOf(config.interval.toString()) }
+    var sort by remember { mutableStateOf(config.sort) }
+    var showTags by remember { mutableStateOf(config.showTags) }
+    var showFundamentals by remember { mutableStateOf(config.showFundamentals) }
+    var showSeparator by remember { mutableStateOf(config.showSeparator) }
+    var showSummary by remember { mutableStateOf(config.showSummary) }
+    var showPositions by remember { mutableStateOf(config.showPositions) }
+    var newGroupName by remember { mutableStateOf("") }
+
+    val intervalValue = interval.trim().toIntOrNull()
+    val intervalValid = intervalValue != null && intervalValue >= 0
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(text = "Settings", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = interval,
+                onValueChange = { interval = it },
+                label = { Text("Refresh interval (seconds)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (!intervalValid) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Interval must be a whole number of zero or more",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(text = "Sort", style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SortOption(label = "Change", selected = sort == null) { sort = null }
+                SortOption(label = "Alpha", selected = sort == "alpha") { sort = "alpha" }
+                SortOption(label = "Value", selected = sort == "value") { sort = "value" }
+                SortOption(label = "User", selected = sort == "user") { sort = "user" }
+            }
+            Spacer(Modifier.height(8.dp))
+            FlagRow(label = "Show tags", checked = showTags) { showTags = it }
+            FlagRow(label = "Show fundamentals", checked = showFundamentals) { showFundamentals = it }
+            FlagRow(label = "Show separator", checked = showSeparator) { showSeparator = it }
+            FlagRow(label = "Show summary", checked = showSummary) { showSummary = it }
+            FlagRow(label = "Show positions", checked = showPositions) { showPositions = it }
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(8.dp))
+            Text(text = "Groups", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            groups.forEachIndexed { index, group ->
+                GroupRow(
+                    group = group,
+                    onRename = { onRenameGroup(index, it) },
+                    onRemove = { onRemoveGroup(index) },
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = newGroupName,
+                    onValueChange = { newGroupName = it },
+                    label = { Text("New group name") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        onAddGroup(newGroupName.trim())
+                        newGroupName = ""
+                    },
+                    enabled = newGroupName.trim().isNotEmpty(),
+                ) {
+                    Text("Add")
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = {
+                    onSave(
+                        SettingsUpdate(
+                            interval = intervalValue ?: config.interval,
+                            sort = sort,
+                            showTags = showTags,
+                            showFundamentals = showFundamentals,
+                            showSeparator = showSeparator,
+                            showSummary = showSummary,
+                            showPositions = showPositions,
+                        ),
+                    )
+                },
+                enabled = intervalValid,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Save")
+            }
+        }
+    }
+}
+
+@Composable
+private fun SortOption(label: String, selected: Boolean, onSelect: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onSelect,
+        label = { Text(label) },
+    )
+}
+
+@Composable
+private fun FlagRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+        )
+        Checkbox(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+// GroupRow renames or removes one displayed group; the rename applies on the button so
+// typing does not restart the poller on every keystroke.
+@Composable
+private fun GroupRow(
+    group: ConfigGroup,
+    onRename: (String) -> Unit,
+    onRemove: () -> Unit,
+) {
+    var name by remember(group.name) { mutableStateOf(group.name) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        TextButton(
+            onClick = { onRename(name.trim()) },
+            enabled = name.trim().isNotEmpty() && name.trim() != group.name,
+        ) {
+            Text("Rename")
+        }
+        TextButton(onClick = onRemove) {
+            Text("Remove")
         }
     }
 }

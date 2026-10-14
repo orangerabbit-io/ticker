@@ -4,6 +4,7 @@ import io.orangerabbit.ticker.ConfigRepository
 import io.orangerabbit.ticker.config.ConfigGroup
 import io.orangerabbit.ticker.config.Lot
 import io.orangerabbit.ticker.config.TickerConfig
+import io.orangerabbit.ticker.config.withDefaultGroup
 import io.orangerabbit.ticker.poll.PollState
 import io.orangerabbit.ticker.poll.QuotePoller
 import kotlinx.coroutines.CancellationException
@@ -20,10 +21,10 @@ import kotlinx.coroutines.launch
 
 // HomeViewModel drives the home screen: it observes the imported config and keeps the
 // quote poller running for the selected group while the app is in the foreground, and
-// writes add-symbol and lot edits back through the config repository. It owns the
-// selected group index as the single source of truth shared by the group tabs, the
-// group pager, and the poller. It lives in androidMain because ConfigRepository is an
-// androidMain interface.
+// writes configuration edits (symbols, lots, groups, settings) back through the config
+// repository. It owns the selected group index as the single source of truth shared by
+// the group tabs, the group pager, and the poller. It lives in androidMain because
+// ConfigRepository is an androidMain interface.
 class HomeViewModel(
     private val poller: QuotePoller,
     private val configRepo: ConfigRepository,
@@ -121,6 +122,52 @@ class HomeViewModel(
         }
     }
 
+    // removeSymbol removes a watchlist entry of the default group (a lot-owned symbol
+    // stays visible through the implicit watchlist until its lots are edited away).
+    fun removeSymbol(symbol: String) {
+        editDefaultGroup { group -> group.copy(watchlist = group.watchlist.filterNot { it == symbol }) }
+    }
+
+    // updateSettings applies the settings sheet's interval, sort mode, and display
+    // flags as a single write.
+    fun updateSettings(settings: SettingsUpdate) {
+        val config = configRepo.config.value ?: return
+        if (settings.interval < 0) return
+        val updated = config.copy(
+            interval = settings.interval,
+            sort = settings.sort,
+            showTags = settings.showTags,
+            showFundamentals = settings.showFundamentals,
+            showSeparator = settings.showSeparator,
+            showSummary = settings.showSummary,
+            showPositions = settings.showPositions,
+        )
+        if (updated == config) return
+        scope.launch { write(updated) }
+    }
+
+    fun addGroup(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        editGroups { groups -> groups + ConfigGroup(name = trimmed) }
+    }
+
+    fun renameGroup(index: Int, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        editGroups { groups ->
+            if (index in groups.indices) {
+                groups.mapIndexed { i, group -> if (i == index) group.copy(name = trimmed) else group }
+            } else {
+                groups
+            }
+        }
+    }
+
+    fun removeGroup(index: Int) {
+        editGroups { groups -> groups.filterIndexed { i, _ -> i != index } }
+    }
+
     // addLot always appends: a symbol can carry several cost-basis lots.
     fun addLot(lot: Lot) {
         editDefaultGroup { group -> group.copy(lots = group.lots + lot) }
@@ -164,6 +211,20 @@ class HomeViewModel(
         }
         if (updated == config) return
         scope.launch { write(updated) }
+    }
+
+    // editGroups applies group management to the displayed group list (the promoted
+    // default group first, per withDefaultGroup) and normalizes the result into the
+    // stored groups form so a renamed or removed promoted default group round-trips
+    // through YAML export; displayed indices match the tab row one-for-one.
+    private fun editGroups(edit: (List<ConfigGroup>) -> List<ConfigGroup>) {
+        val config = configRepo.config.value ?: return
+        val displayed = config.withDefaultGroup().groups
+        val updated = edit(displayed)
+        if (updated == displayed) return
+        scope.launch {
+            write(config.copy(watchlist = emptyList(), lots = emptyList(), groups = updated))
+        }
     }
 
     // write persists a config edit; a failed write is reported through saveError and
