@@ -5,10 +5,10 @@ import android.content.Context
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.orangerabbit.ticker.poll.QuotePoller
+import io.orangerabbit.ticker.source.SymbolMapCache
 import io.orangerabbit.ticker.source.SymbolsClient
 import io.orangerabbit.ticker.source.coinbase.CoinbaseClient
 import io.orangerabbit.ticker.source.coinbase.CoinbaseQuoteSource
-import io.orangerabbit.ticker.source.yahoo.InMemorySessionStore
 import io.orangerabbit.ticker.source.yahoo.YahooClient
 import io.orangerabbit.ticker.source.yahoo.YahooQuoteSource
 import io.orangerabbit.ticker.source.yahoo.YahooSessionStore
@@ -19,10 +19,10 @@ import org.koin.dsl.module
 // appModule wires the app graph: quote sources over the OkHttp engine, the symbol map
 // client, the foreground quote poller, and the DataStore-backed config repository.
 val appModule = module {
-    // InMemorySessionStore: the Yahoo handshake session (cookies + crumb) is lost on
-    // process death. The handshake is cheap, so this is acceptable; a DataStore-backed
-    // store with a 24h TTL is the upgrade path.
-    single<YahooSessionStore> { InMemorySessionStore() }
+    // DataStoreSessionStore: the Yahoo handshake session (cookies + crumb) persists in
+    // DataStore with a 24h TTL and survives process death; stale entries are ignored
+    // and re-handshaken.
+    single<YahooSessionStore> { DataStoreSessionStore(get()) }
     // No HttpCookies plugin and OkHttp's default no-cookies jar: YahooClient performs
     // its own handshake and must not get automatic cookie storage. Automatic redirect
     // following is disabled on the shared client so no consumer (Coinbase, SymbolsClient)
@@ -31,7 +31,10 @@ val appModule = module {
     single { HttpClient(OkHttp) { followRedirects = false } }
     single<YahooQuoteSource> { YahooClient(get(), get()) }
     single<CoinbaseQuoteSource> { CoinbaseClient(get()) }
-    single { SymbolsClient(get()) }
+    // DataStoreSymbolMapCache persists the .X symbol map snapshot (CSV + fetch time)
+    // with the same 24h TTL policy SymbolsClient applies to its in-memory cache.
+    single<SymbolMapCache> { DataStoreSymbolMapCache(get()) }
+    single { SymbolsClient(get(), get<SymbolMapCache>()) }
     single { QuotePoller(get(), get(), get()) }
     single<ConfigRepository> { ConfigRepositoryImpl(get()) }
     single { HomeViewModel(get(), get()) }
