@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
@@ -15,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -43,8 +45,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.orangerabbit.ticker.config.ConfigGroup
 import io.orangerabbit.ticker.config.Lot
@@ -78,6 +81,9 @@ data class SettingsUpdate(
     val showSummary: Boolean,
     val showPositions: Boolean,
 )
+
+// SheetShape is the corner radius every bottom sheet shares.
+private val SheetShape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
 
 // GroupTabsScreen is the app's single screen: a tab row over the config's groups (with
 // the top-level watchlist/lots promoted to a "default" group via withDefaultGroup) with
@@ -330,7 +336,8 @@ private fun QuoteList(
                     Text(
                         text = "Unavailable: " + pollState.unavailable.joinToString(", "),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = TickerMono,
+                        color = LocalTickerWarning.current,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -370,7 +377,8 @@ private fun ErrorBanner(
         Text(
             text = message,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
+            fontFamily = TickerMono,
+            color = LocalTickerWarning.current,
             modifier = Modifier.weight(1f),
         )
         TextButton(onClick = onRetry) {
@@ -440,12 +448,16 @@ private fun SearchSheet(
     // row-level add feedback for the current query only; the next query clears it
     var added by remember(query) { mutableStateOf(emptySet<String>()) }
     val outcome = state?.outcome
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        shape = SheetShape,
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 32.dp)
+                .navigationBarsPadding()
+                .padding(16.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
             Text(text = "Symbols", style = MaterialTheme.typography.titleMedium)
@@ -545,7 +557,7 @@ private fun SearchResultRow(
             Text(
                 text = result.symbol,
                 style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = TickerMono,
             )
             if (result.name.isNotEmpty()) {
                 Text(
@@ -613,12 +625,16 @@ private fun SettingsSheet(
     // add/rename onto a taken name is disabled here and rejected in the view model
     val takenNames = groups.mapTo(HashSet()) { it.name }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        shape = SheetShape,
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 32.dp)
+                .navigationBarsPadding()
+                .padding(16.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
             Text(text = "Settings", style = MaterialTheme.typography.titleMedium)
@@ -838,12 +854,16 @@ private fun LotEditorSheet(
         fixedCost = lot?.fixedCost?.toString().orEmpty()
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        shape = SheetShape,
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 32.dp)
+                .navigationBarsPadding()
+                .padding(16.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
             Text(text = "Lots — $groupName", style = MaterialTheme.typography.titleMedium)
@@ -861,13 +881,27 @@ private fun LotEditorSheet(
                         onClick = { openEditor(index, lot) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(
-                            text = lot.symbol + "  " + formatAmount(lot.quantity, false) +
-                                " @ " + formatMoney(lot.unitCost) +
-                                "  fee " + formatMoney(lot.fixedCost),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = lot.symbol,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = TickerMono,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                text = formatAmount(lot.quantity, false) + " @ " +
+                                    formatMoney(lot.unitCost) + "  fee " + formatMoney(lot.fixedCost),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = TickerMono,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.End,
+                            )
+                        }
                     }
                 }
                 Spacer(Modifier.height(8.dp))

@@ -1,6 +1,5 @@
 package io.orangerabbit.ticker.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,26 +15,25 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.orangerabbit.ticker.asset.Asset
 
-// Bitcoin branding accent; only rows whose symbol starts with "BTC" use it.
-internal val BitcoinOrange = Color(0xFFF7931A)
-
-private val SuccessLight = Color(0xFF2E7D32)
-private val SuccessDark = Color(0xFF81C784)
-
-// changeColor follows the Material green/red convention by change sign: up is green,
-// down is the theme error color, and flat stays the neutral onSurface.
+// changeColor follows the green/red convention by change sign: up is the theme's
+// positive color, down is its negative color, and flat stays the neutral onSurface.
+// Colors come from the theme (not system-dark detection) so a forced light/dark theme
+// mode never disagrees with the row colors.
 @Composable
-internal fun changeColor(changePercent: Double): Color = when {
-    changePercent > 0 -> if (isSystemInDarkTheme()) SuccessDark else SuccessLight
-    changePercent < 0 -> MaterialTheme.colorScheme.error
-    else -> MaterialTheme.colorScheme.onSurface
+internal fun changeColor(changePercent: Double): Color {
+    val tickerColors = LocalTickerColors.current
+    return when {
+        changePercent > 0 -> tickerColors.positive
+        changePercent < 0 -> tickerColors.negative
+        else -> MaterialTheme.colorScheme.onSurface
+    }
 }
 
 @Composable
 internal fun symbolColor(symbol: String): Color =
-    if (symbol.startsWith("BTC")) BitcoinOrange else MaterialTheme.colorScheme.onSurface
+    if (symbol.startsWith("BTC")) BtcOrange else MaterialTheme.colorScheme.onSurface
 
-// QuoteRow renders one quote: bold symbol (BTC orange for Bitcoin symbols), muted
+// QuoteRow renders one quote: mono semibold symbol (BTC orange for Bitcoin symbols), muted
 // truncated name, optional tag and fundamentals lines, and the right-aligned price
 // with a signed day change colored by direction.
 @Composable
@@ -51,9 +49,10 @@ fun QuoteRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = asset.symbol,
+                text = asset.symbol.uppercase(),
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
+                fontFamily = TickerMono,
+                fontWeight = FontWeight.SemiBold,
                 color = symbolColor(asset.symbol),
             )
             if (asset.name.isNotBlank()) {
@@ -86,7 +85,7 @@ fun QuoteRow(
             Text(
                 text = formatPrice(asset.quotePrice.price, asset.meta.isVariablePrecision),
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
+                fontFamily = TickerMono,
             )
             Text(
                 text = changeText(
@@ -95,6 +94,7 @@ fun QuoteRow(
                     asset.meta.isVariablePrecision,
                 ),
                 style = MaterialTheme.typography.bodySmall,
+                fontFamily = TickerMono,
                 color = changeColor(asset.quotePrice.changePercent),
             )
         }

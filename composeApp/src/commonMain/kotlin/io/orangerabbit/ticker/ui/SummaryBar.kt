@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -52,7 +53,8 @@ private fun SummaryCell(
     valueColor: Color,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier) {
+    // table-like right-aligned column: muted sans label over the mono value
+    Column(modifier = modifier, horizontalAlignment = Alignment.End) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
@@ -61,6 +63,7 @@ private fun SummaryCell(
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
+            fontFamily = TickerMono,
             color = valueColor,
         )
     }
